@@ -1,0 +1,66 @@
+# Default settings. Override any of these in config/local.toml (git-ignored)
+# or point --config at another file. Only the keys you set are overridden.
+
+[game]
+# The agent attaches to the first on-screen window whose title or owning app
+# contains one of these strings.
+window_match = ["Space Station 14", "Robust.Client", "SS14"]
+
+[layout]
+# Regions are fractions of the game window's content area: [x, y, width, height].
+# Defaults assume the "Separated" UI layout (Options > Graphics > UI layout),
+# which puts the game viewport on the left and chat in a panel on the right.
+# Run `ss14-agent snap` and adjust until the boxes line up with your screen.
+viewport = [0.0, 0.0, 0.70, 1.0]
+chat = [0.705, 0.40, 0.29, 0.52]
+# How many tiles the game viewport shows. SS14 renders 15 tiles high and
+# `viewport.width` (default 21) tiles wide. Used to compute tile size.
+viewport_tiles_high = 15
+viewport_tiles_wide = 21
+# Set to a positive number to force the on-screen tile size in window pixels
+# (Retina pixels, not points). 0 = derive from viewport height.
+tile_px = 0
+# Height of the window title bar in points, excluded from the regions above.
+# -1 = auto (0 when the window fills the screen, otherwise 28).
+titlebar_pt = -1
+
+[capture]
+# "auto" tries ScreenCaptureKit first (macOS 14+), then CGWindowListCreateImage.
+backend = "auto"
+
+[decision]
+endpoint = "https://openrouter.ai/api/alpha/decisions"
+model = "inception/mercury-decide:free"
+api_key_env = "OPENROUTER_API_KEY"
+# How the screenshot is attached to a request. Run `ss14-agent probe` to find
+# the one the endpoint actually reads: "assets", "assets_dataurl",
+# "state_image", or "none".
+image_mode = "assets"
+# Width the screenshot is downscaled to before sending.
+image_width = 1024
+timeout_s = 20
+# Cap on decision calls per second (free tier rate limits are not published).
+max_calls_per_s = 2.0
+# Below this probability the agent waits instead of acting on a choice.
+min_confidence = 0.30
+
+[agent]
+tick_hz = 15
+playbook = "janitor"
+# Ask for a fresh decision at least this often even if nothing happened.
+heartbeat_s = 4.0
+# Minimum seconds between chat messages the agent sends.
+chat_cooldown_s = 15.0
+# Max object markers drawn and offered as targets per decision.
+max_markers = 12
+# Tiles within which the character can click/use things.
+reach_tiles = 1.4
+# Pause the agent as soon as you press a key or click in the game.
+# Press F8 to hand control back.
+takeover_on_input = true
+# Save every decision's annotated frame under logs/.
+save_frames = true
+
+[ocr]
+# Seconds between OCR passes on the chat panel.
+chat_interval_s = 1.0

@@ -1,0 +1,64 @@
+name = "Station Engineer"
+summary = """You are a Station Engineer. Your job is to keep the station's structure and \
+power working: repair broken windows, walls and floors, keep the power running, \
+and respond when crew report damage or outages. Engineering is where your tools \
+and materials are kept."""
+
+phrases = [
+    "Hello!",
+    "Engineering here, on my way.",
+    "Where's the damage?",
+    "I'll fix that.",
+    "Repaired.",
+    "Watch out, there's a hull breach!",
+    "Power looks fine here.",
+    "Sorry, I'm busy right now.",
+]
+
+[[duties]]
+id = "get_tools"
+description = "Get your tools: a toolbox or toolbelt with a welder, wrench, screwdriver and crowbar."
+cue = "You're not holding any tools."
+steps = [
+    "Look for a toolbox, toolbelt or tool lockers in Engineering.",
+    "Walk to it and click it (or press E on it) to open it.",
+    "Pick up the tools you need.",
+]
+
+[[duties]]
+id = "repair_damage"
+description = "Find and repair broken windows, walls or floor tiles."
+cue = "A cracked or shattered window, a damaged wall, or missing floor tiles are visible."
+steps = [
+    "Walk next to the damaged structure.",
+    "Hold the right tool or material for the repair (for example a welder for windows).",
+    "Click the damaged structure with it.",
+]
+
+[[duties]]
+id = "check_power"
+description = "Check that power equipment (APCs, SMES units, substations) is working."
+cue = "Lights are off, or you're near power equipment and haven't checked it recently."
+steps = [
+    "Walk to the power equipment.",
+    "Inspect it to read its status.",
+    "If something is wrong, report it on chat.",
+]
+
+[[duties]]
+id = "respond_to_crew"
+description = "Answer crew who report damage or ask for engineering, then go help."
+cue = "Someone in chat mentions engineering, damage, power, or speaks to you directly."
+steps = [
+    "Reply in chat with a short phrase.",
+    "Head where they asked.",
+]
+
+[[duties]]
+id = "patrol"
+description = "Walk around looking for damage or power problems."
+cue = "Nothing needs fixing on screen and nobody has asked for anything."
+steps = [
+    "Pick a direction you haven't explored recently and walk that way.",
+    "Watch for damage, dark rooms, or crew who need help.",
+]
