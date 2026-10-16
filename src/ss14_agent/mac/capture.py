@@ -8,23 +8,27 @@ import threading
 import numpy as np
 import Quartz
 
+from ..imageconv import buffer_to_rgb
 from ..platform import WindowInfo
 
 log = logging.getLogger(__name__)
 
 
 def cgimage_to_rgb(img) -> np.ndarray:
-    """Convert a CGImage (32-bit BGRA, the format window captures use) to RGB uint8."""
+    """Convert a 32-bit CGImage (window captures are BGRA) to RGB uint8."""
     w = Quartz.CGImageGetWidth(img)
     h = Quartz.CGImageGetHeight(img)
     bpr = Quartz.CGImageGetBytesPerRow(img)
-    data = Quartz.CGDataProviderCopyData(Quartz.CGImageGetDataProvider(img))
-    arr = np.frombuffer(bytes(data), dtype=np.uint8).reshape(h, bpr // 4, 4)[:, :w, :]
+    data = bytes(Quartz.CGDataProviderCopyData(Quartz.CGImageGetDataProvider(img)))
     info = Quartz.CGImageGetBitmapInfo(img)
-    little = (info & Quartz.kCGBitmapByteOrderMask) == Quartz.kCGBitmapByteOrder32Little
-    if little:  # memory order B, G, R, A
-        return np.ascontiguousarray(arr[..., [2, 1, 0]])
-    return np.ascontiguousarray(arr[..., [1, 2, 3]])  # A, R, G, B
+    alpha = Quartz.CGImageGetAlphaInfo(img)
+    if (info & Quartz.kCGBitmapByteOrderMask) == Quartz.kCGBitmapByteOrder32Little:
+        order = "BGRA"
+    elif alpha in (Quartz.kCGImageAlphaFirst, Quartz.kCGImageAlphaPremultipliedFirst, Quartz.kCGImageAlphaNoneSkipFirst):
+        order = "ARGB"
+    else:
+        order = "RGBA"
+    return buffer_to_rgb(data, w, h, bpr, order)
 
 
 class CGWindowCapturer:
