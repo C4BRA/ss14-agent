@@ -9,12 +9,18 @@ Request shape (shared by Jev and Mercury Decide):
 - noul (yes/no): criteria is {"true": ..., "false": ...}; answer has "noul" (probability of true).
 - score: criteria is a list of level descriptions; answer has "score".
 
-Image attachment isn't documented for the OpenRouter endpoint yet, so the
-client supports several layouts, and `ss14-agent probe` finds the one that works.
+Images go in differently per endpoint, so the client supports two layouts
+(`ss14-agent probe` checks which one the model actually reads):
+
+- parts (OpenRouter, incl. Mercury Decide): `state` becomes a top-level list of
+  plain strings and {"type": "image_url", "image_url": {"url": "data:..."}} parts.
+- assets (TypeSafe Jev): images live in a top-level `assets` map and are
+  referenced by key from a string in `state`.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -27,7 +33,7 @@ from ..config import DecisionCfg
 
 log = logging.getLogger(__name__)
 
-IMAGE_MODES = ("assets", "assets_dataurl", "state_image", "none")
+IMAGE_MODES = ("parts", "assets", "none")
 
 
 @dataclass
@@ -105,20 +111,22 @@ def build_payload(
     image_mode: str,
     media_type: str = "image/jpeg",
 ) -> dict[str, Any]:
-    state = dict(state)
-    payload: dict[str, Any] = {"model": model, "state": state, "questions": questions}
-    if image_b64 and image_mode != "none":
-        data_url = f"data:{media_type};base64,{image_b64}"
-        if image_mode == "assets":
-            payload["assets"] = {"screen": {"type": "image", "media_type": media_type, "data": image_b64}}
-            state["screen"] = "asset:screen"
-        elif image_mode == "assets_dataurl":
-            payload["assets"] = {"screen": data_url}
-            state["screen"] = "asset:screen"
-        elif image_mode == "state_image":
-            state["screen"] = data_url
-        else:
-            raise ValueError(f"Unknown image_mode '{image_mode}' (expected one of {IMAGE_MODES})")
+    if image_mode not in IMAGE_MODES:
+        raise ValueError(f"Unknown image_mode '{image_mode}' (expected one of {IMAGE_MODES})")
+    payload: dict[str, Any] = {"model": model, "state": dict(state), "questions": questions}
+    if not image_b64 or image_mode == "none":
+        return payload
+    if image_mode == "parts":
+        # OpenRouter only reads image parts placed directly in a top-level state list.
+        payload["state"] = [
+            "State: " + json.dumps(state, ensure_ascii=False),
+            "Screen image (`screen`):",
+            {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{image_b64}"}},
+        ]
+    else:  # assets
+        fmt = "png" if media_type.endswith("png") else "jpg"
+        payload["assets"] = {"screen-image": {"type": "image", "format": fmt, "data_base64": image_b64}}
+        payload["state"]["screen"] = "screen-image"
     return payload
 
 
