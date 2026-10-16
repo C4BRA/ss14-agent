@@ -32,10 +32,9 @@ backend = "auto"
 endpoint = "https://openrouter.ai/api/alpha/decisions"
 model = "inception/mercury-decide:free"
 api_key_env = "OPENROUTER_API_KEY"
-# How the screenshot is attached to a request. Run `ss14-agent probe` to find
-# the one the endpoint actually reads: "assets", "assets_dataurl",
-# "state_image", or "none".
-image_mode = "assets"
+# How the screenshot is attached to a request: "parts" (OpenRouter image_url parts
+# in the state list), "assets" (TypeSafe Jev), or "none". `ss14-agent probe` checks it.
+image_mode = "parts"
 # Width the screenshot is downscaled to before sending.
 image_width = 1024
 timeout_s = 20
