@@ -28,7 +28,7 @@ The goal is a proof of concept: a decision model can play a real-time multiplaye
 - **Seeing.** Each frame is cut into the game's 32 px tile grid. Your character is always at the centre (SS14's camera follows you), so positions are just tile offsets. Interesting tiles get numbered yellow markers. Walking is tracked by measuring how the floor slides across the screen (phase correlation), and chat is read with Apple's built-in OCR.
 - **Deciding.** Mercury Decide doesn't write text; it picks from options and returns a probability for each. Each decision asks four questions in one call: which **duty** from the job playbook to work on, which **action** to take next (`walk_to:3`, `click:5`, `activate:2`, `inspect:4`, `explore:north`, `say:1`, `wait`...), whether someone **spoke to you**, and whether you're **in danger**.
 - **Acting.** Actions are closed-loop skills: `walk_to` runs A* over the tiles and holds W/A/S/D, remembers walls it bumps into, and gives up if stuck. `click` walks into reach first, then clicks. `inspect` right-clicks and reads the entity menu, so the agent learns names like "mop bucket".
-- **Job playbooks** (`playbooks/*.toml`) give the model structure that "do your job" lacks: a handful of duties, simple steps for each, and phrases it can say. Janitor and Station Engineer are included.
+- **Job playbooks** (`playbooks/*.toml`) give the model structure that "do your job" lacks: a handful of duties, simple steps for each, and phrases it can say. Janitor, Station Engineer and Botanist are included.
 
 ## Requirements
 

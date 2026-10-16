@@ -18,7 +18,7 @@ def _obs():
 
 def test_playbooks_load():
     names = playbooks.available()
-    assert {"janitor", "engineer"} <= set(names)
+    assert {"janitor", "engineer", "botanist"} <= set(names)
     for n in names:
         pb = playbooks.load(n)
         assert pb.duties and pb.phrases
