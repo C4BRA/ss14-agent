@@ -29,12 +29,12 @@ titlebar_pt = -1
 backend = "auto"
 
 [decision]
-endpoint = "https://openrouter.ai/api/alpha/decisions"
+# Provider: "openrouter" or "typesafe" (see src/ss14_agent/providers.py). The
+# endpoint, key variable and image layout follow the provider; set endpoint,
+# api_key_env or image_mode here only to override it. Keys can be pasted into
+# the control window, which saves them in the macOS Keychain.
+provider = "openrouter"
 model = "inception/mercury-decide:free"
-api_key_env = "OPENROUTER_API_KEY"
-# How the screenshot is attached to a request: "parts" (OpenRouter image_url parts
-# in the state list), "assets" (TypeSafe Jev), or "none". `ss14-agent probe` checks it.
-image_mode = "parts"
 # Width the screenshot is downscaled to before sending.
 image_width = 1024
 timeout_s = 20
@@ -48,9 +48,9 @@ min_confidence = 0.30
 # and a short step-by-step plan. The decision model then picks actions that carry
 # out the current step. Set enabled = false to run on the decision model alone.
 enabled = true
-endpoint = "https://openrouter.ai/api/v1/chat/completions"
+# Provider: openrouter, anthropic, openai, google, xai, groq, ollama, lmstudio.
+provider = "openrouter"
 model = "anthropic/claude-sonnet-5.5"
-api_key_env = "OPENROUTER_API_KEY"
 # Re-plan at least this often; it also re-plans when chat, failures or a finished
 # step call for it.
 interval_s = 20

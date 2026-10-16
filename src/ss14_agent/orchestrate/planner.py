@@ -1,4 +1,4 @@
-"""Orchestrator client: OpenRouter chat completions with a screenshot, returning a JSON plan.
+"""Orchestrator client: a chat model (OpenAI-compatible or Anthropic) given a screenshot, returning a JSON plan.
 
 The decision model is fast and good at picking from a menu, but it only sees
 one moment and can't reason about goals. The orchestrator runs every few
@@ -18,6 +18,7 @@ from typing import Any
 import httpx
 
 from ..config import OrchestratorCfg
+from ..providers import auth_headers
 
 SYSTEM_PROMPT = """You are the strategic brain of an AI agent playing Space Station 14, a \
 multiplayer space-station role-playing game, as a crew member. You see a screenshot of the game \
@@ -121,39 +122,51 @@ class Orchestrator:
 
     def plan(self, state: dict[str, Any], duties: list[str], image_b64: str | None = None,
              previous: Plan | None = None, media_type: str = "image/jpeg") -> Plan:
+        prov = self.cfg.provider_info
         key = self.cfg.api_key
-        if not key:
-            raise OrchestratorError(f"No API key: set {self.cfg.api_key_env} in your environment or .env file")
+        if self.cfg.key_var and not key:
+            raise OrchestratorError(f"No API key for {prov.name}: paste it in the control window or set {self.cfg.key_var}")
         context = dict(state)
         context["duty_ids"] = duties
         if previous is not None:
             context["your_previous_plan"] = {**previous.for_state(), "made_seconds_ago": round(time.time() - previous.t)}
-        content: list[dict[str, Any]] = [{"type": "text", "text": json.dumps(context, ensure_ascii=False)}]
-        if image_b64:
-            content.append({"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{image_b64}"}})
-        payload = {
-            "model": self.cfg.model,
-            "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": content}],
-            "max_tokens": self.cfg.max_tokens,
-            "temperature": 0.3,
-        }
+        text_part = json.dumps(context, ensure_ascii=False)
+        headers = {"Content-Type": "application/json", **auth_headers(prov, key)}
+        if prov.api == "anthropic":
+            content: list[dict[str, Any]] = [{"type": "text", "text": text_part}]
+            if image_b64:
+                content.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_b64}})
+            url = f"{self.cfg.base_url}/messages"
+            payload = {"model": self.cfg.model, "system": SYSTEM_PROMPT, "max_tokens": self.cfg.max_tokens,
+                       "temperature": 0.3, "messages": [{"role": "user", "content": content}]}
+        else:
+            content = [{"type": "text", "text": text_part}]
+            if image_b64:
+                content.append({"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{image_b64}"}})
+            url = f"{self.cfg.base_url}/chat/completions"
+            headers["X-Title"] = "ss14-agent"
+            payload = {
+                "model": self.cfg.model,
+                "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": content}],
+                "max_tokens": self.cfg.max_tokens,
+                "temperature": 0.3,
+            }
         started = time.perf_counter()
         try:
-            resp = self._http.post(
-                self.cfg.endpoint,
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json", "X-Title": "ss14-agent"},
-                json=payload,
-            )
+            resp = self._http.post(url, headers=headers, json=payload)
         except httpx.HTTPError as exc:
-            raise OrchestratorError(f"Request failed: {exc}") from exc
+            raise OrchestratorError(f"Request to {prov.name} failed: {exc}") from exc
         latency = (time.perf_counter() - started) * 1000
         if resp.status_code >= 400:
-            raise OrchestratorError(f"HTTP {resp.status_code} from {self.cfg.endpoint}: {resp.text[:300]}")
+            raise OrchestratorError(f"HTTP {resp.status_code} from {prov.name}: {resp.text[:300]}")
         try:
             body = resp.json()
-            text = body["choices"][0]["message"]["content"]
+            if prov.api == "anthropic":
+                text = "".join(b.get("text", "") for b in body["content"] if b.get("type") == "text")
+            else:
+                text = body["choices"][0]["message"]["content"]
         except (ValueError, KeyError, IndexError, TypeError) as exc:
-            raise OrchestratorError(f"Unexpected response: {resp.text[:300]}") from exc
+            raise OrchestratorError(f"Unexpected response from {prov.name}: {resp.text[:300]}") from exc
         if isinstance(text, list):  # some providers return content parts
             text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
         plan = parse_plan(text or "", duties)

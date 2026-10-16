@@ -154,20 +154,19 @@ class DecisionClient:
         image_mode: str | None = None,
         media_type: str = "image/jpeg",
     ) -> DecisionResult:
+        prov = self.cfg.provider_info
         key = self.cfg.api_key
-        if not key:
-            raise DecisionError(f"No API key: set {self.cfg.api_key_env} in your environment or .env file")
-        payload = build_payload(self.cfg.model, state, questions, image_b64, image_mode or self.cfg.image_mode, media_type)
+        if self.cfg.key_var and not key:
+            raise DecisionError(f"No API key for {prov.name}: paste it in the control window or set {self.cfg.key_var}")
+        payload = build_payload(self.cfg.model, state, questions, image_b64, image_mode or self.cfg.layout, media_type)
+        headers = {"Content-Type": "application/json", "X-Title": "ss14-agent", **prov.headers}
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
         for _attempt in range(4):
             self._wait_turn()
             started = time.perf_counter()
             try:
-                resp = self._http.post(
-                    self.cfg.endpoint,
-                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
-                             "X-Title": "ss14-agent"},
-                    json=payload,
-                )
+                resp = self._http.post(self.cfg.url, headers=headers, json=payload)
             except httpx.HTTPError as exc:
                 raise DecisionError(f"Request failed: {exc}") from exc
             latency = (time.perf_counter() - started) * 1000

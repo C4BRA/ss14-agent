@@ -34,9 +34,19 @@ def cmd_doctor(cfg: Config, args) -> int:
             print(f"  [{'x' if ok else ' '}] {name}")
             ok_all &= ok
         print("  If you just granted one, quit and reopen your terminal app.\n")
-    key = cfg.decision.api_key
-    print(f"API key ({cfg.decision.api_key_env}): {'set' if key else 'MISSING (add it to .env)'}")
-    ok_all &= bool(key)
+    from . import providers
+
+    for role, c in (("Decision", cfg.decision), ("Orchestrator", cfg.orchestrator)):
+        if role == "Orchestrator" and not cfg.orchestrator.enabled:
+            print("Orchestrator: off")
+            continue
+        prov = c.provider_info
+        try:
+            note = providers.check(prov, c.api_key, c.model)
+            print(f"{role}: {prov.name}, {c.model}: connected ({note})")
+        except providers.ConnectionFailed as exc:
+            print(f"{role}: {prov.name}, {c.model}: NOT connected ({exc})")
+            ok_all = False
     p = _platform(cfg)
     win = p.windows.find(cfg.game.window_match)
     if win is None:
@@ -87,7 +97,7 @@ def cmd_probe(cfg: Config, args) -> int:
     from .decide.client import IMAGE_MODES, DecisionClient, DecisionError
 
     client = DecisionClient(cfg.decision)
-    print(f"Endpoint {cfg.decision.endpoint}, model {cfg.decision.model}\n")
+    print(f"Endpoint {cfg.decision.url}, model {cfg.decision.model}\n")
     q_text = {"is_morning": {"type": "noul", "instructions": "Is the time in the state in the morning?",
                              "criteria": {"true": "Morning (before noon).", "false": "Not morning."}}}
     try:
@@ -185,19 +195,19 @@ def cmd_run(cfg: Config, args) -> int:
 
 
 def cmd_models(cfg: Config, args) -> int:
-    from . import models
+    from . import models, providers
 
-    try:
-        catalog = models.fetch_catalog()
-    except Exception as exc:
-        print(f"Couldn't fetch {models.CATALOG_URL}: {exc}")
-        return 1
-    print("Decision models (Decisions API; OpenRouter doesn't flag these, so this matches by name):")
-    for m in models.decision_models(catalog, cfg.decision.models):
-        print(f"  {m}{'   <- current' if m == cfg.decision.model else ''}")
-    print("\nOrchestrator candidates (chat models that accept images):")
-    for m in models.vision_models(catalog, cfg.orchestrator.models):
-        print(f"  {m}{'   <- current' if m == cfg.orchestrator.model else ''}")
+    for role, c in (("Decision", cfg.decision), ("Orchestrator", cfg.orchestrator)):
+        prov = c.provider_info
+        try:
+            ids = models.models_for(role.lower(), c)
+        except (providers.ConnectionFailed, OSError) as exc:
+            print(f"{role} models from {prov.name}: couldn't list ({exc})\n")
+            continue
+        print(f"{role} models from {prov.name}:")
+        for m in ids:
+            print(f"  {m}{'   <- current' if m == c.model else ''}")
+        print()
     return 0
 
 
@@ -222,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:
     once = sub.add_parser("decide-once", help="make one decision on the current screen and print it (no input sent)")
     once.add_argument("--note", help="instruction for the agent")
     sub.add_parser("windows", help="list on-screen windows")
-    sub.add_parser("models", help="list decision and orchestrator models available on OpenRouter")
+    sub.add_parser("models", help="list the models the chosen decision and orchestrator providers offer")
     for p in (gui, run, once):
         p.add_argument("--playbook", default=None, help="playbook name in playbooks/ (default from config)")
         p.add_argument("--decision-model", help="decision model id, e.g. inception/mercury-decide:free")
@@ -234,6 +244,10 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     load_dotenv()
+    from .keystore import load_saved_keys
+    from .providers import DECISION_PROVIDERS, ORCHESTRATOR_PROVIDERS
+
+    load_saved_keys([p.key_env for p in (*DECISION_PROVIDERS.values(), *ORCHESTRATOR_PROVIDERS.values())])
     cfg = load_config(args.config)
     if getattr(args, "decision_model", None):
         cfg.decision.model = args.decision_model

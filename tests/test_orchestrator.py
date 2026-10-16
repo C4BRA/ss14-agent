@@ -38,7 +38,7 @@ def test_orchestrator_sends_image_and_parses(monkeypatch):
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(content)}}]})
 
     cfg = load_config().orchestrator
-    monkeypatch.setenv(cfg.api_key_env, "k")
+    monkeypatch.setenv(cfg.key_var, "k")
     orch = Orchestrator(cfg, httpx.Client(transport=httpx.MockTransport(handler)))
     plan = orch.plan({"your_role": "Janitor"}, DUTIES, "QUJD")
     assert plan.goal == "Patrol the hall" and plan.model == cfg.model

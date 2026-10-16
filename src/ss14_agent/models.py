@@ -1,4 +1,4 @@
-"""Model lists for the pickers: OpenRouter's public catalog, filtered per role."""
+"""Model lists for the pickers, per provider and role."""
 
 from __future__ import annotations
 
@@ -38,3 +38,24 @@ def vision_models(catalog: list[dict[str, Any]], preferred: list[str]) -> list[s
                 and not any(h in mid.lower() for h in DECISION_HINTS)):
             found.append(mid)
     return _merge(preferred, found)
+
+
+def models_for(role: str, cfg) -> list[str]:
+    """Model ids for the picker: role is "decision" or "orchestrator", cfg its config section.
+
+    OpenRouter's public catalog is filtered by role; other providers list their own
+    models (which needs a working key). Raises providers.ConnectionFailed on failure.
+    """
+    from . import providers
+
+    prov = cfg.provider_info
+    preferred = [m for m in [cfg.model, prov.default_model, *prov.models, *cfg.models] if m]
+    if prov.id == "openrouter":
+        try:
+            catalog = fetch_catalog()
+        except httpx.HTTPError as exc:
+            raise providers.ConnectionFailed(f"can't load OpenRouter's model list: {exc}") from exc
+        return decision_models(catalog, preferred) if role == "decision" else vision_models(catalog, preferred)
+    if role == "decision":
+        return _merge(preferred, [])
+    return _merge(preferred, providers.list_models(prov, cfg.api_key))

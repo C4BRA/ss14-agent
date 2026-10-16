@@ -88,7 +88,7 @@ def test_client_posts_and_retries_on_429(monkeypatch):
 
     cfg = load_config().decision
     cfg.max_calls_per_s = 1000
-    monkeypatch.setenv(cfg.api_key_env, "k")
+    monkeypatch.setenv(cfg.key_var, "k")
     client = DecisionClient(cfg, httpx.Client(transport=httpx.MockTransport(handler)))
     res = client.decide({"s": 1}, {"x": {"type": "noul"}})
     assert res.answers["x"].yes == 0.9
