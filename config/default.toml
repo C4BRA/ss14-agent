@@ -43,6 +43,21 @@ max_calls_per_s = 2.0
 # Below this probability the agent waits instead of acting on a choice.
 min_confidence = 0.30
 
+[orchestrator]
+# A general vision LLM that looks at the screen every so often and sets the goal
+# and a short step-by-step plan. The decision model then picks actions that carry
+# out the current step. Set enabled = false to run on the decision model alone.
+enabled = true
+endpoint = "https://openrouter.ai/api/v1/chat/completions"
+model = "anthropic/claude-sonnet-5.5"
+api_key_env = "OPENROUTER_API_KEY"
+# Re-plan at least this often; it also re-plans when chat, failures or a finished
+# step call for it.
+interval_s = 20
+image_width = 1024
+timeout_s = 60
+max_tokens = 700
+
 [agent]
 tick_hz = 15
 playbook = "janitor"

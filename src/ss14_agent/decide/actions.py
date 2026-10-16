@@ -171,7 +171,8 @@ def build_questions(playbook: Playbook, actions: list[ActionSpec]) -> dict[str, 
             "type": "choice",
             "instructions": (
                 "Pick the single next action that best moves the current duty forward, or answers "
-                "someone who just spoke to you. Use the numbered markers in the image to choose targets. "
+                "someone who just spoke to you. If the state has a plan_from_your_orchestrator, pick "
+                "the action that carries out its do_now step. Use the numbered markers in the image to choose targets. "
                 "Don't repeat an action that just failed in the same way. When you need to find "
                 "something, explore toward unexplored areas instead of going back where you've been, "
                 "and use go_back to return to things you identified earlier."

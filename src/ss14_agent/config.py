@@ -46,6 +46,27 @@ class DecisionCfg:
     timeout_s: float = 20
     max_calls_per_s: float = 2.0
     min_confidence: float = 0.30
+    # Shown in the model picker alongside any decision models OpenRouter lists.
+    models: list[str] = field(default_factory=lambda: ["inception/mercury-decide:free", "inception/mercury-decide"])
+
+    @property
+    def api_key(self) -> str:
+        return os.environ.get(self.api_key_env, "")
+
+
+@dataclass
+class OrchestratorCfg:
+    """A general vision LLM that plans; the decision model carries out the plan."""
+
+    enabled: bool = True
+    endpoint: str = "https://openrouter.ai/api/v1/chat/completions"
+    model: str = "anthropic/claude-sonnet-5.5"
+    api_key_env: str = "OPENROUTER_API_KEY"
+    interval_s: float = 20.0
+    image_width: int = 1024
+    timeout_s: float = 60.0
+    max_tokens: int = 700
+    models: list[str] = field(default_factory=lambda: ["anthropic/claude-sonnet-5.5"])
 
     @property
     def api_key(self) -> str:
@@ -75,6 +96,7 @@ class Config:
     layout: LayoutCfg = field(default_factory=LayoutCfg)
     capture: CaptureCfg = field(default_factory=CaptureCfg)
     decision: DecisionCfg = field(default_factory=DecisionCfg)
+    orchestrator: OrchestratorCfg = field(default_factory=OrchestratorCfg)
     agent: AgentCfg = field(default_factory=AgentCfg)
     ocr: OcrCfg = field(default_factory=OcrCfg)
 
@@ -121,7 +143,7 @@ def load_config(path: str | Path | None = None) -> Config:
         data = _merge(data, tomllib.loads(Path(override).read_text()))
     sections = {
         "game": GameCfg, "layout": LayoutCfg, "capture": CaptureCfg,
-        "decision": DecisionCfg, "agent": AgentCfg, "ocr": OcrCfg,
+        "decision": DecisionCfg, "orchestrator": OrchestratorCfg, "agent": AgentCfg, "ocr": OcrCfg,
     }
     unknown = set(data) - set(sections)
     if unknown:

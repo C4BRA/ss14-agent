@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QImage, QPixmap
 from PySide6.QtWidgets import (
@@ -50,6 +52,32 @@ class ControlWindow(QMainWindow):
         top.addWidget(self.pause_btn)
         top.addWidget(self.on_top)
 
+        # Model pickers. Lists come from OpenRouter's catalog; you can also type any model id.
+        self.decision_model = QComboBox()
+        self.decision_model.setEditable(True)
+        self.decision_model.addItems(cfg.decision.models)
+        self.decision_model.setCurrentText(cfg.decision.model)
+        self.decision_model.currentTextChanged.connect(self._decision_model_changed)
+        self.orch_model = QComboBox()
+        self.orch_model.setEditable(True)
+        self.orch_model.addItem(self.ORCH_OFF)
+        self.orch_model.addItems(cfg.orchestrator.models)
+        self.orch_model.setCurrentText(cfg.orchestrator.model if cfg.orchestrator.enabled else self.ORCH_OFF)
+        self.orch_model.currentTextChanged.connect(self._orch_model_changed)
+        for box in (self.decision_model, self.orch_model):
+            box.setMinimumContentsLength(28)
+            box.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.refresh_btn = QPushButton("Refresh lists")
+        self.refresh_btn.clicked.connect(self._refresh_models)
+        self._catalog: list | None = None
+        self._catalog_error = ""
+        models_row = QHBoxLayout()
+        models_row.addWidget(QLabel("Decision model:"))
+        models_row.addWidget(self.decision_model, 1)
+        models_row.addWidget(QLabel("Orchestrator:"))
+        models_row.addWidget(self.orch_model, 1)
+        models_row.addWidget(self.refresh_btn)
+
         # Live view
         self.view = QLabel("Press Start with SS14 open and joined to a server.")
         self.view.setAlignment(Qt.AlignCenter)
@@ -58,7 +86,8 @@ class ControlWindow(QMainWindow):
 
         # Status + decision panel
         self.fields = {k: QLabel("–") for k in
-                       ("Mode", "Window", "Loop", "Position", "Duty", "Doing", "Decision", "Chat / danger", "Latency")}
+                       ("Mode", "Window", "Loop", "Position", "Goal", "Plan step", "Duty", "Doing", "Decision",
+                        "Chat / danger", "Latency")}
         form = QFormLayout()
         for k, lbl in self.fields.items():
             lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -101,6 +130,7 @@ class ControlWindow(QMainWindow):
 
         root = QVBoxLayout()
         root.addLayout(top)
+        root.addLayout(models_row)
         root.addWidget(split, 1)
         w = QWidget()
         w.setLayout(root)
@@ -109,6 +139,7 @@ class ControlWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._refresh)
         self.timer.start(100)
+        self._refresh_models()
 
     # ---- actions --------------------------------------------------------
 
@@ -128,6 +159,7 @@ class ControlWindow(QMainWindow):
             self.start_btn.setText("Stop")
             self.pause_btn.setEnabled(True)
             self.playbook.setEnabled(False)
+            self.orch_model.setEnabled(self.agent.orchestrator is not None)  # model can change, on/off can't
         else:
             self.agent.stop()
             self._refresh()
@@ -135,6 +167,7 @@ class ControlWindow(QMainWindow):
             self.start_btn.setText("Start")
             self.pause_btn.setEnabled(False)
             self.playbook.setEnabled(True)
+            self.orch_model.setEnabled(True)
 
     def _toggle_pause(self) -> None:
         if self.agent is None:
@@ -143,6 +176,60 @@ class ControlWindow(QMainWindow):
             self.agent.resume()
         else:
             self.agent.pause("Pause button")
+
+    ORCH_OFF = "(off: decision model only)"
+
+    def _decision_model_changed(self, text: str) -> None:
+        if text.strip():
+            self.cfg.decision.model = text.strip()   # the client reads this on every call
+
+    def _orch_model_changed(self, text: str) -> None:
+        text = text.strip()
+        if not text:
+            return
+        if text == self.ORCH_OFF:
+            self.cfg.orchestrator.enabled = False
+        else:
+            self.cfg.orchestrator.enabled = True
+            self.cfg.orchestrator.model = text
+
+    def _refresh_models(self) -> None:
+        """Fetch OpenRouter's catalog in the background; _refresh fills the lists when it arrives."""
+        from .. import models
+
+        self.refresh_btn.setEnabled(False)
+        self.refresh_btn.setText("Loading…")
+
+        def work() -> None:
+            try:
+                self._catalog = models.fetch_catalog()
+            except Exception as exc:  # network errors only change the button text
+                self._catalog_error = str(exc)
+                self._catalog = []
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _fill_models(self) -> None:
+        from .. import models
+
+        catalog, self._catalog = self._catalog, None
+        self.refresh_btn.setEnabled(True)
+        self.refresh_btn.setText("Refresh lists")
+        if not catalog:
+            self.refresh_btn.setToolTip(f"Couldn't load the model list: {self._catalog_error}")
+            return
+        for box, ids, keep in (
+            (self.decision_model, models.decision_models(catalog, self.cfg.decision.models), []),
+            (self.orch_model, models.vision_models(catalog, self.cfg.orchestrator.models), [self.ORCH_OFF]),
+        ):
+            current = box.currentText()
+            box.blockSignals(True)
+            box.clear()
+            box.addItems(keep + ids)
+            box.setCurrentText(current)
+            box.blockSignals(False)
+        self.refresh_btn.setToolTip(f"{self.orch_model.count() - 1} vision models, "
+                                    f"{self.decision_model.count()} decision models")
 
     def _note_changed(self, text: str) -> None:
         if self.agent is not None:
@@ -171,6 +258,8 @@ class ControlWindow(QMainWindow):
 
     def _refresh(self) -> None:
         self._apply_window_mode()
+        if self._catalog is not None:
+            self._fill_models()
         a = self.agent
         if a is None:
             return
@@ -180,6 +269,15 @@ class ControlWindow(QMainWindow):
         self.fields["Window"].setText(s.window or "–")
         self.fields["Loop"].setText(f"{s.fps:.0f} fps")
         self.fields["Position"].setText(f"{s.pos[0]:+.1f}, {s.pos[1]:+.1f} tiles from start")
+        if s.plan is not None:
+            self.fields["Goal"].setText(f"{s.plan.goal}  ({s.plan.latency_ms / 1000:.1f} s)")
+            self.fields["Plan step"].setText(
+                " → ".join(f"[{st}]" if i == s.plan.current_step else st for i, st in enumerate(s.plan.steps))
+            )
+        elif s.plan_error:
+            self.fields["Goal"].setText(f"planning error: {s.plan_error[:200]}")
+        elif a.orchestrator is None:
+            self.fields["Goal"].setText("orchestrator off")
         self.fields["Duty"].setText(s.duty or "–")
         self.fields["Doing"].setText(s.skill or "–")
         d = s.decision
