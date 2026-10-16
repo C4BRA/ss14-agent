@@ -64,12 +64,16 @@ def test_parse_response_variants():
 
 def test_payload_image_modes():
     q = {"x": {"type": "noul"}}
-    p = build_payload("m", {"a": 1}, q, "QUJD", "assets")
-    assert p["assets"]["screen"]["data"] == "QUJD" and p["state"]["screen"] == "asset:screen"
-    p = build_payload("m", {"a": 1}, q, "QUJD", "state_image")
-    assert p["state"]["screen"].startswith("data:image/jpeg;base64,") and "assets" not in p
+    p = build_payload("m", {"a": 1}, q, "QUJD", "parts")
+    assert isinstance(p["state"], list) and '"a": 1' in p["state"][0]
+    assert p["state"][-1] == {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,QUJD"}}
+    p = build_payload("m", {"a": 1}, q, "QUJD", "assets", media_type="image/png")
+    assert p["assets"]["screen-image"] == {"type": "image", "format": "png", "data_base64": "QUJD"}
+    assert p["state"]["screen"] == "screen-image"
     p = build_payload("m", {"a": 1}, q, "QUJD", "none")
-    assert "screen" not in p["state"]
+    assert p["state"] == {"a": 1}
+    with pytest.raises(ValueError):
+        build_payload("m", {}, q, "QUJD", "state_image")
 
 
 def test_client_posts_and_retries_on_429(monkeypatch):
@@ -84,7 +88,7 @@ def test_client_posts_and_retries_on_429(monkeypatch):
 
     cfg = load_config().decision
     cfg.max_calls_per_s = 1000
-    monkeypatch.setenv(cfg.api_key_env, "k")
+    monkeypatch.setenv(cfg.key_var, "k")
     client = DecisionClient(cfg, httpx.Client(transport=httpx.MockTransport(handler)))
     res = client.decide({"s": 1}, {"x": {"type": "noul"}})
     assert res.answers["x"].yes == 0.9

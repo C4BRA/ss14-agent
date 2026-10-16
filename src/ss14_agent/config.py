@@ -38,18 +38,79 @@ class CaptureCfg:
 
 @dataclass
 class DecisionCfg:
-    endpoint: str = "https://openrouter.ai/api/alpha/decisions"
+    provider: str = "openrouter"
     model: str = "inception/mercury-decide:free"
-    api_key_env: str = "OPENROUTER_API_KEY"
-    image_mode: str = "assets"
+    endpoint: str = ""        # "" = the provider's
+    api_key_env: str = ""     # "" = the provider's
+    image_mode: str = ""      # "" = the provider's
     image_width: int = 1024
     timeout_s: float = 20
     max_calls_per_s: float = 2.0
     min_confidence: float = 0.30
+    # Extra entries for the model picker (the provider's own list is added).
+    models: list[str] = field(default_factory=list)
+
+    @property
+    def provider_info(self):
+        from .providers import DECISION_PROVIDERS
+
+        if self.provider not in DECISION_PROVIDERS:
+            raise ValueError(f"Unknown decision provider '{self.provider}' (choose from {', '.join(DECISION_PROVIDERS)})")
+        return DECISION_PROVIDERS[self.provider]
+
+    @property
+    def url(self) -> str:
+        return self.endpoint or self.provider_info.base_url
+
+    @property
+    def key_var(self) -> str:
+        return self.api_key_env or self.provider_info.key_env
 
     @property
     def api_key(self) -> str:
-        return os.environ.get(self.api_key_env, "")
+        return os.environ.get(self.key_var, "") if self.key_var else ""
+
+    @property
+    def layout(self) -> str:
+        return self.image_mode or self.provider_info.image_mode
+
+
+@dataclass
+class OrchestratorCfg:
+    """A general vision LLM that plans; the decision model carries out the plan."""
+
+    enabled: bool = True
+    provider: str = "openrouter"
+    model: str = "anthropic/claude-sonnet-5.5"
+    endpoint: str = ""        # "" = the provider's base URL
+    api_key_env: str = ""     # "" = the provider's
+    interval_s: float = 20.0
+    image_width: int = 1024
+    timeout_s: float = 60.0
+    max_tokens: int = 700
+    models: list[str] = field(default_factory=list)
+
+    @property
+    def provider_info(self):
+        from .providers import ORCHESTRATOR_PROVIDERS
+
+        if self.provider not in ORCHESTRATOR_PROVIDERS:
+            raise ValueError(
+                f"Unknown orchestrator provider '{self.provider}' (choose from {', '.join(ORCHESTRATOR_PROVIDERS)})"
+            )
+        return ORCHESTRATOR_PROVIDERS[self.provider]
+
+    @property
+    def base_url(self) -> str:
+        return (self.endpoint or self.provider_info.base_url).rstrip("/")
+
+    @property
+    def key_var(self) -> str:
+        return self.api_key_env or self.provider_info.key_env
+
+    @property
+    def api_key(self) -> str:
+        return os.environ.get(self.key_var, "") if self.key_var else ""
 
 
 @dataclass
@@ -75,6 +136,7 @@ class Config:
     layout: LayoutCfg = field(default_factory=LayoutCfg)
     capture: CaptureCfg = field(default_factory=CaptureCfg)
     decision: DecisionCfg = field(default_factory=DecisionCfg)
+    orchestrator: OrchestratorCfg = field(default_factory=OrchestratorCfg)
     agent: AgentCfg = field(default_factory=AgentCfg)
     ocr: OcrCfg = field(default_factory=OcrCfg)
 
@@ -121,7 +183,7 @@ def load_config(path: str | Path | None = None) -> Config:
         data = _merge(data, tomllib.loads(Path(override).read_text()))
     sections = {
         "game": GameCfg, "layout": LayoutCfg, "capture": CaptureCfg,
-        "decision": DecisionCfg, "agent": AgentCfg, "ocr": OcrCfg,
+        "decision": DecisionCfg, "orchestrator": OrchestratorCfg, "agent": AgentCfg, "ocr": OcrCfg,
     }
     unknown = set(data) - set(sections)
     if unknown:

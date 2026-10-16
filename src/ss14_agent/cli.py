@@ -1,4 +1,4 @@
-"""Command line entry point: `ss14-agent [gui|run|doctor|snap|probe|decide-once|windows]`."""
+"""Command line entry point: `ss14-agent [gui|run|doctor|snap|probe|decide-once|windows|models]`."""
 
 from __future__ import annotations
 
@@ -34,9 +34,19 @@ def cmd_doctor(cfg: Config, args) -> int:
             print(f"  [{'x' if ok else ' '}] {name}")
             ok_all &= ok
         print("  If you just granted one, quit and reopen your terminal app.\n")
-    key = cfg.decision.api_key
-    print(f"API key ({cfg.decision.api_key_env}): {'set' if key else 'MISSING (add it to .env)'}")
-    ok_all &= bool(key)
+    from . import providers
+
+    for role, c in (("Decision", cfg.decision), ("Orchestrator", cfg.orchestrator)):
+        if role == "Orchestrator" and not cfg.orchestrator.enabled:
+            print("Orchestrator: off")
+            continue
+        prov = c.provider_info
+        try:
+            note = providers.check(prov, c.api_key, c.model)
+            print(f"{role}: {prov.name}, {c.model}: connected ({note})")
+        except providers.ConnectionFailed as exc:
+            print(f"{role}: {prov.name}, {c.model}: NOT connected ({exc})")
+            ok_all = False
     p = _platform(cfg)
     win = p.windows.find(cfg.game.window_match)
     if win is None:
@@ -87,7 +97,7 @@ def cmd_probe(cfg: Config, args) -> int:
     from .decide.client import IMAGE_MODES, DecisionClient, DecisionError
 
     client = DecisionClient(cfg.decision)
-    print(f"Endpoint {cfg.decision.endpoint}, model {cfg.decision.model}\n")
+    print(f"Endpoint {cfg.decision.url}, model {cfg.decision.model}\n")
     q_text = {"is_morning": {"type": "noul", "instructions": "Is the time in the state in the morning?",
                              "criteria": {"true": "Morning (before noon).", "false": "Not morning."}}}
     try:
@@ -141,6 +151,20 @@ def cmd_decide_once(cfg: Config, args) -> int:
     frame = p.capturer.grab(win)
     obs = agent.observer.observe(frame, win)
     agent.operator_note = args.note or ""
+    if agent.orchestrator is not None:
+        print(f"Planning with {cfg.orchestrator.model}...")
+        agent._plan(obs, "manual")
+        plan = agent.status.plan
+        if plan is None:
+            print(f"Planning failed: {agent.status.plan_error}\n(continuing without a plan)")
+        else:
+            print(f"Goal: {plan.goal}   ({plan.latency_ms:.0f} ms)")
+            for i, step in enumerate(plan.steps):
+                print(f"  {'→' if i == plan.current_step else ' '} {i + 1}. {step}")
+            if plan.say:
+                print(f"  Would say: {plan.say!r}")
+        agent._results.clear()
+    print(f"Deciding with {cfg.decision.model}...")
     agent._decide(obs, "manual")
     d = agent.status.decision
     if d is None or d.error:
@@ -170,6 +194,23 @@ def cmd_run(cfg: Config, args) -> int:
     return 0
 
 
+def cmd_models(cfg: Config, args) -> int:
+    from . import models, providers
+
+    for role, c in (("Decision", cfg.decision), ("Orchestrator", cfg.orchestrator)):
+        prov = c.provider_info
+        try:
+            ids = models.models_for(role.lower(), c)
+        except (providers.ConnectionFailed, OSError) as exc:
+            print(f"{role} models from {prov.name}: couldn't list ({exc})\n")
+            continue
+        print(f"{role} models from {prov.name}:")
+        for m in ids:
+            print(f"  {m}{'   <- current' if m == c.model else ''}")
+        print()
+    return 0
+
+
 def cmd_gui(cfg: Config, args) -> int:
     from .gui.app import run_gui
 
@@ -191,18 +232,34 @@ def main(argv: list[str] | None = None) -> int:
     once = sub.add_parser("decide-once", help="make one decision on the current screen and print it (no input sent)")
     once.add_argument("--note", help="instruction for the agent")
     sub.add_parser("windows", help="list on-screen windows")
+    sub.add_parser("models", help="list the models the chosen decision and orchestrator providers offer")
     for p in (gui, run, once):
         p.add_argument("--playbook", default=None, help="playbook name in playbooks/ (default from config)")
+        p.add_argument("--decision-model", help="decision model id, e.g. inception/mercury-decide:free")
+        p.add_argument("--orchestrator-model", help="orchestrator model id, e.g. anthropic/claude-sonnet-5.5")
+        p.add_argument("--no-orchestrator", action="store_true", help="run on the decision model alone")
     args = parser.parse_args(argv)
     if not hasattr(args, "playbook"):
         args.playbook = None
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     load_dotenv()
+    from .keystore import load_saved_keys
+    from .providers import DECISION_PROVIDERS, ORCHESTRATOR_PROVIDERS
+
+    load_saved_keys([p.key_env for p in (*DECISION_PROVIDERS.values(), *ORCHESTRATOR_PROVIDERS.values())])
     cfg = load_config(args.config)
+    if getattr(args, "decision_model", None):
+        cfg.decision.model = args.decision_model
+    if getattr(args, "orchestrator_model", None):
+        cfg.orchestrator.model = args.orchestrator_model
+        cfg.orchestrator.enabled = True
+    if getattr(args, "no_orchestrator", False):
+        cfg.orchestrator.enabled = False
     handlers = {
         None: cmd_gui, "gui": cmd_gui, "run": cmd_run, "doctor": cmd_doctor, "snap": cmd_snap,
         "probe": cmd_probe, "decide-once": cmd_decide_once, "windows": cmd_windows,
+        "models": cmd_models,
     }
     return handlers[args.cmd](cfg, args)
 
