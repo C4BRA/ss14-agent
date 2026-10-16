@@ -225,7 +225,7 @@ class ControlWindow(QMainWindow):
         self.pause_btn.setText("Resume (F8)" if a.paused else "Pause (F8)")
         self.fields["Mode"].setText(s.mode)
         self.fields["Window"].setText(s.window or "–")
-        self.fields["Loop"].setText(f"{s.fps:.0f} fps")
+        self.fields["Loop"].setText(f"{s.fps:.0f} fps · {s.mem_mb:.0f} MB" if s.mem_mb else f"{s.fps:.0f} fps")
         self.fields["Position"].setText(f"{s.pos[0]:+.1f}, {s.pos[1]:+.1f} tiles from start")
         lib = a.library
         self.fields["Learned"].setText(f"{len(lib.names)} things from {len(lib)} pictures")

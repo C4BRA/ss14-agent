@@ -6,9 +6,11 @@ import Quartz
 from AppKit import NSApplicationActivateIgnoringOtherApps, NSRunningApplication, NSScreen
 
 from ..platform import WindowInfo
+from .pool import pooled
 
 
 class QuartzWindows:
+    @pooled
     def list_windows(self) -> list[WindowInfo]:
         opts = Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements
         infos = Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID) or []
@@ -43,11 +45,13 @@ class QuartzWindows:
         # The biggest matching window is the game, not e.g. the launcher's popups.
         return max(candidates, key=lambda w: w.width * w.height)
 
+    @pooled
     def activate(self, win: WindowInfo) -> None:
         app = NSRunningApplication.runningApplicationWithProcessIdentifier_(win.pid)
         if app is not None:
             app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
 
+    @pooled
     def screen_size(self) -> tuple[float, float]:
         frame = NSScreen.mainScreen().frame()
         return float(frame.size.width), float(frame.size.height)

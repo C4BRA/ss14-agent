@@ -13,6 +13,7 @@ import time
 import Quartz
 
 from .keys import keycode
+from .pool import pooled
 
 AGENT_EVENT_TAG = 0x55A9E7
 
@@ -51,6 +52,7 @@ class QuartzInput:
             f |= _FLAG[m.lower()]
         return f
 
+    @pooled
     def key_down(self, key: str) -> None:
         with self._lock:
             if key in self._held:
@@ -58,11 +60,13 @@ class QuartzInput:
             self._held.add(key)
         self._post(Quartz.CGEventCreateKeyboardEvent(self._src, keycode(key), True))
 
+    @pooled
     def key_up(self, key: str) -> None:
         with self._lock:
             self._held.discard(key)
         self._post(Quartz.CGEventCreateKeyboardEvent(self._src, keycode(key), False))
 
+    @pooled
     def tap(self, key: str, mods: tuple[str, ...] = ()) -> None:
         flags = self._flags(mods)
         for m in mods:
@@ -73,6 +77,7 @@ class QuartzInput:
         for m in reversed(mods):
             self._post(Quartz.CGEventCreateKeyboardEvent(self._src, keycode(m), False))
 
+    @pooled
     def type_text(self, text: str) -> None:
         for ch in text:
             down = Quartz.CGEventCreateKeyboardEvent(self._src, 0, True)
@@ -83,10 +88,12 @@ class QuartzInput:
             self._post(up)
             time.sleep(0.012)
 
+    @pooled
     def mouse_move(self, x: float, y: float) -> None:
         ev = Quartz.CGEventCreateMouseEvent(self._src, Quartz.kCGEventMouseMoved, (x, y), Quartz.kCGMouseButtonLeft)
         self._post(ev)
 
+    @pooled
     def click(self, x: float, y: float, button: str = "left", mods: tuple[str, ...] = ()) -> None:
         down_t, up_t, btn = _MOUSE[button]
         flags = self._flags(mods)

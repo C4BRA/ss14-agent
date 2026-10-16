@@ -32,6 +32,9 @@ masks = []
 [capture]
 # "auto" tries ScreenCaptureKit first (macOS 14+), then CGWindowListCreateImage.
 backend = "auto"
+# Most screenshots per second. Each one is a full-resolution copy of the window,
+# so higher rates cost a lot of memory bandwidth and GPU time.
+max_fps = 10
 
 [decision]
 # Provider: "openrouter" or "typesafe" (see src/ss14_agent/providers.py). The
@@ -77,6 +80,8 @@ reach_tiles = 1.4
 # Pause the agent as soon as you press a key or click in the game.
 # Press F8 to hand control back.
 takeover_on_input = true
+# Pause the agent if its memory use goes above this many MB, to protect the Mac.
+max_memory_mb = 2500
 # Save every decision's annotated frame under logs/.
 save_frames = true
 

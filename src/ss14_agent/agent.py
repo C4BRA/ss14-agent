@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
+import subprocess
 import threading
 import time
 from collections import deque
@@ -41,6 +43,16 @@ from .skills import Skill, SkillContext, make_skill
 log = logging.getLogger("ss14_agent")
 
 
+def rss_mb() -> float | None:
+    """Resident memory of this process in MB, or None if it can't be read."""
+    try:
+        out = subprocess.run(["ps", "-o", "rss=", "-p", str(os.getpid())], capture_output=True, text=True,
+                             timeout=2, check=False).stdout.strip()
+        return int(out) / 1024 if out else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 @dataclass
 class DecisionView:
     """What the control window shows about the latest decision."""
@@ -65,6 +77,7 @@ class AgentStatus:
     duty: str | None = None
     decision: DecisionView | None = None
     fps: float = 0.0
+    mem_mb: float = 0.0
     pos: tuple[float, float] = (0.0, 0.0)
     log: deque[str] = field(default_factory=lambda: deque(maxlen=300))
     log_count: int = 0
@@ -340,11 +353,25 @@ class Agent:
         frame = self.p.capturer.grab(self._win)
         return self.observer.observe(frame, self._win)
 
+    def _check_memory(self) -> None:
+        """Track this process's memory and pause before a leak can take the Mac down."""
+        mb = rss_mb()
+        if mb is None:
+            return
+        self.status.mem_mb = mb
+        limit = self.cfg.agent.max_memory_mb
+        if limit and mb > limit and not self._paused.is_set():
+            self.pause(f"memory use reached {mb:.0f} MB, over the {limit:.0f} MB limit")
+
     def _control_loop(self) -> None:
-        period = 1.0 / self.cfg.agent.tick_hz
+        period = 1.0 / max(0.5, min(self.cfg.agent.tick_hz, self.cfg.capture.max_fps))
         last = time.monotonic()
+        last_mem = 0.0
         while not self._stop.is_set():
             t0 = time.monotonic()
+            if t0 - last_mem > 5.0:
+                last_mem = t0
+                self._check_memory()
             try:
                 obs = self._grab()
             except Exception as exc:

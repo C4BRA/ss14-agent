@@ -10,6 +10,7 @@ import Quartz
 
 from ..imageconv import buffer_to_rgb
 from ..platform import WindowInfo
+from .pool import pooled
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ def cgimage_to_rgb(img) -> np.ndarray:
 class CGWindowCapturer:
     name = "cgwindow"
 
+    @pooled
     def grab(self, win: WindowInfo) -> np.ndarray:
         img = Quartz.CGWindowListCreateImage(
             Quartz.CGRectNull,
@@ -62,6 +64,8 @@ class ScreenCaptureKitCapturer:
             raise RuntimeError("SCScreenshotManager needs macOS 14 or newer")
         self._sc_window = None
         self._sc_window_id = None
+        self._setup = None
+        self._setup_key = None
 
     def _wait(self, starter, timeout: float = 3.0):
         done = threading.Event()
@@ -78,6 +82,7 @@ class ScreenCaptureKitCapturer:
             raise RuntimeError(f"ScreenCaptureKit error: {box['error']}")
         return box["result"]
 
+    @pooled
     def _window(self, win: WindowInfo):
         if self._sc_window_id != win.window_id:
             sc = self.SCK.SCShareableContent
@@ -89,16 +94,21 @@ class ScreenCaptureKitCapturer:
             self._sc_window, self._sc_window_id = match[0], win.window_id
         return self._sc_window
 
+    @pooled
     def grab(self, win: WindowInfo) -> np.ndarray:
         SCK = self.SCK
         scw = self._window(win)
-        filt = SCK.SCContentFilter.alloc().initWithDesktopIndependentWindow_(scw)
-        cfg = SCK.SCStreamConfiguration.alloc().init()
-        scale = float(filt.pointPixelScale()) if hasattr(filt, "pointPixelScale") else 2.0
-        frame = scw.frame()
-        cfg.setWidth_(int(frame.size.width * scale))
-        cfg.setHeight_(int(frame.size.height * scale))
-        cfg.setShowsCursor_(False)
+        key = (win.window_id, win.width, win.height)
+        if self._setup_key != key:
+            # Build the filter and configuration once per window size, not every frame.
+            filt = SCK.SCContentFilter.alloc().initWithDesktopIndependentWindow_(scw)
+            cfg = SCK.SCStreamConfiguration.alloc().init()
+            scale = float(filt.pointPixelScale()) if hasattr(filt, "pointPixelScale") else 2.0
+            cfg.setWidth_(int(win.width * scale))
+            cfg.setHeight_(int(win.height * scale))
+            cfg.setShowsCursor_(False)
+            self._setup, self._setup_key = (filt, cfg), key
+        filt, cfg = self._setup
         img = self._wait(
             lambda h: SCK.SCScreenshotManager.captureImageWithFilter_configuration_completionHandler_(filt, cfg, h)
         )
@@ -120,6 +130,7 @@ class AutoCapturer:
     def name(self) -> str:
         return self._active.name
 
+    @pooled
     def grab(self, win: WindowInfo) -> np.ndarray:
         try:
             return self._active.grab(win)

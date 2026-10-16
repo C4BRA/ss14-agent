@@ -35,6 +35,7 @@ class LayoutCfg:
 @dataclass
 class CaptureCfg:
     backend: str = "auto"
+    max_fps: float = 10.0
 
 
 @dataclass
@@ -123,6 +124,7 @@ class AgentCfg:
     max_markers: int = 12
     reach_tiles: float = 1.4
     takeover_on_input: bool = True
+    max_memory_mb: float = 2500
     save_frames: bool = True
 
 

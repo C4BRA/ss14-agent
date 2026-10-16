@@ -167,3 +167,13 @@ def test_actions_that_keep_failing_leave_the_menu(tmp_path, monkeypatch):
     agent._decide(obs, "manual")
     opts = client.calls[-1][1]["action"]["criteria"]
     assert "explore:west" not in opts and "explore:east" in opts
+
+
+def test_agent_pauses_when_memory_runs_away(tmp_path, monkeypatch):
+    monkeypatch.setattr("ss14_agent.agent.REPO_ROOT", tmp_path)
+    monkeypatch.setattr("ss14_agent.agent.rss_mb", lambda: 4000.0)
+    cfg = fake_layout(load_config())
+    agent = Agent(cfg, fake_platform(FakeWorld()), "janitor", client=RecordingClient())
+    agent._check_memory()
+    assert agent.paused and agent.status.mem_mb == 4000.0
+    assert any("memory use reached 4000 MB" in line for line in agent.status.log)
