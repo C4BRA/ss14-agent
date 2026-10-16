@@ -49,7 +49,7 @@ def tile_stats(rgb: np.ndarray, geo: Geometry) -> list[TileStats]:
             cx, cy = geo.tile_to_px(dx, dy)
             x0, y0 = int(cx - t / 2) + pad, int(cy - t / 2) + pad
             x1, y1 = int(cx + t / 2) - pad, int(cy + t / 2) - pad
-            if not (geo.in_view(x0, y0) and geo.in_view(x1, y1)):
+            if not (geo.in_view(x0, y0) and geo.in_view(x1, y1)) or geo.masked(cx, cy):
                 continue
             crop = rgb[y0:y1, x0:x1].astype(np.float32)
             if crop.size == 0:

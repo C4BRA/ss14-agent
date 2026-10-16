@@ -27,6 +27,8 @@ class Geometry:
     view_h: float
     tile_px: float
     chat_rect: tuple[float, float, float, float]
+    # UI areas to ignore (chat panel + configured masks), in capture pixels.
+    masks: tuple[tuple[float, float, float, float], ...] = ()
 
     @property
     def center(self) -> tuple[float, float]:
@@ -49,6 +51,9 @@ class Geometry:
     def px_to_screen(self, x: float, y: float) -> tuple[float, float]:
         """Capture pixel to global screen point, for mouse events."""
         return self.win.x + x / self.scale, self.win.y + y / self.scale
+
+    def masked(self, x: float, y: float) -> bool:
+        return any(mx <= x <= mx + mw and my <= y <= my + mh for mx, my, mw, mh in self.masks)
 
     def in_view(self, x: float, y: float, margin: float = 0) -> bool:
         return (
@@ -87,4 +92,5 @@ def compute_geometry(
 
     cx, cy, cwf, chf = layout.chat
     chat = (cx * cw, top + cy * ch, cwf * cw, chf * ch)
-    return Geometry(win, scale, top, cw, ch, rx, ry, rw, rh, tile, chat)
+    masks = (chat,) + tuple((mx * cw, top + my * ch, mw * cw, mh * ch) for mx, my, mw, mh in layout.masks)
+    return Geometry(win, scale, top, cw, ch, rx, ry, rw, rh, tile, chat, masks)

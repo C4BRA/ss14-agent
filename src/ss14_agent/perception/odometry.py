@@ -68,6 +68,11 @@ class Odometry:
         x0, y0 = int(geo.view_x), int(geo.view_y)
         crop = rgb[y0:y0 + int(geo.view_h), x0:x0 + int(geo.view_w)]
         g = to_gray_small(crop, self._factor)
+        # Blank out UI overlays (chat scrolling would look like movement).
+        f = self._factor
+        for mx, my, mw, mh in geo.masks:
+            ys, xs = int((my - y0) / f), int((mx - x0) / f)
+            g[max(0, ys):max(0, ys + int(mh / f) + 1), max(0, xs):max(0, xs + int(mw / f) + 1)] = g.mean()
         # Mask the player sprite (a 2x2 tile box around the centre) with the mean.
         t = geo.tile_px / self._factor
         cy, cx = g.shape[0] / 2, g.shape[1] / 2

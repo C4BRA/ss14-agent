@@ -23,6 +23,11 @@ tile_px = 0
 # Height of the window title bar in points, excluded from the regions above.
 # -1 = auto (0 when the window fills the screen, otherwise 28).
 titlebar_pt = -1
+# Screen areas covered by UI (buttons, hotbar, status icons) as [x, y, w, h]
+# fractions, like viewport. Markers and movement tracking ignore them. The chat
+# panel is always ignored. Example for the Default layout's bottom hotbar:
+# masks = [[0.0, 0.937, 0.71, 0.063]]
+masks = []
 
 [capture]
 # "auto" tries ScreenCaptureKit first (macOS 14+), then CGWindowListCreateImage.
