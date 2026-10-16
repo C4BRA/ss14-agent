@@ -105,6 +105,23 @@ class WalkTo(Skill):
             elif k not in want and k in held:
                 ctx.input.key_up(k)
 
+    def _route(self, ctx: SkillContext, obs: Observation, start: Tile, goal: Tile) -> list[Tile] | None:
+        """A* path, loosening the map until one exists.
+
+        Bumped tiles and dark tiles are only guesses (drift, people, unlit rooms), so
+        when they wall the agent in, forget nearby bumps, then ignore darkness, then
+        head straight for the goal and let stuck detection find out what's real.
+        """
+        path = astar(start, goal, (ctx.blocked | obs.space) - {start})
+        if path is None and ctx.blocked:
+            ctx.unblock_near(start)
+            path = astar(start, goal, (ctx.blocked | obs.space) - {start})
+        if path is None:
+            path = astar(start, goal, ctx.blocked - {start})
+        if path is None:
+            path = [start, goal]
+        return path
+
     def tick(self, ctx: SkillContext, obs: Observation) -> Status:
         now = time.monotonic()
         d = dist_to(obs, self.target)
@@ -117,8 +134,8 @@ class WalkTo(Skill):
 
         start = (round(obs.pos[0]), round(obs.pos[1]))
         goal = (round(self.target[0]), round(self.target[1]))
-        blocked = (ctx.blocked | obs.space) - {start}
-        path = astar(start, goal, blocked)
+        ctx.prune_blocked()
+        path = self._route(ctx, obs, start, goal)
         if path is None:
             self._set_keys(ctx, set())
             return failed("no walkable path found")
@@ -140,7 +157,7 @@ class WalkTo(Skill):
             self._stuck += 1
             wp = (round(waypoint[0]), round(waypoint[1]))
             if wp != goal:
-                ctx.blocked.add(wp)
+                ctx.block(wp)
             self._hist.clear()
             if self._stuck >= 5:
                 self._set_keys(ctx, set())

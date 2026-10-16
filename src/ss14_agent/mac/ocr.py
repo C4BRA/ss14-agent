@@ -8,6 +8,7 @@ import Vision
 from Foundation import NSData
 
 from ..platform import OcrLine
+from .pool import pooled
 
 
 def rgb_to_cgimage(rgb: np.ndarray):
@@ -31,6 +32,7 @@ class VisionOcr:
             Vision.VNRequestTextRecognitionLevelAccurate if accurate else Vision.VNRequestTextRecognitionLevelFast
         )
 
+    @pooled
     def read(self, rgb: np.ndarray) -> list[OcrLine]:
         if rgb.size == 0:
             return []

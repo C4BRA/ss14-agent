@@ -29,11 +29,13 @@ class LayoutCfg:
     viewport_tiles_wide: int = 21
     tile_px: float = 0
     titlebar_pt: float = -1
+    masks: list[Rect] = field(default_factory=list)
 
 
 @dataclass
 class CaptureCfg:
     backend: str = "auto"
+    max_fps: float = 10.0
 
 
 @dataclass
@@ -122,7 +124,21 @@ class AgentCfg:
     max_markers: int = 12
     reach_tiles: float = 1.4
     takeover_on_input: bool = True
+    max_memory_mb: float = 2500
     save_frames: bool = True
+
+
+@dataclass
+class PerceptionCfg:
+    """How the decision model learns what's on screen."""
+
+    mode: str = "text"            # "text": map + named things, no image; "image": annotated screenshot
+    orchestrator_image: bool = True
+    library: str = "default"      # name of the learned tile library under data/tiles/
+    match_threshold: float = 0.95
+    auto_probe: bool = True       # right-click unknown things nearby when idle, to learn their names
+    probe_radius: float = 6.0
+    probe_interval_s: float = 2.5
 
 
 @dataclass
@@ -139,6 +155,7 @@ class Config:
     orchestrator: OrchestratorCfg = field(default_factory=OrchestratorCfg)
     agent: AgentCfg = field(default_factory=AgentCfg)
     ocr: OcrCfg = field(default_factory=OcrCfg)
+    perception: PerceptionCfg = field(default_factory=PerceptionCfg)
 
 
 def _merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
@@ -157,7 +174,11 @@ def _section(cls, data: dict[str, Any]):
     for k, v in data.items():
         if k not in known:
             raise ValueError(f"Unknown setting '{k}' in [{cls.__name__.removesuffix('Cfg').lower()}]")
-        kwargs[k] = tuple(v) if isinstance(v, list) and k in ("viewport", "chat") else v
+        if k in ("viewport", "chat") and isinstance(v, list):
+            v = tuple(v)
+        elif k == "masks":
+            v = [tuple(r) for r in v]
+        kwargs[k] = v
     return cls(**kwargs)
 
 
@@ -184,6 +205,7 @@ def load_config(path: str | Path | None = None) -> Config:
     sections = {
         "game": GameCfg, "layout": LayoutCfg, "capture": CaptureCfg,
         "decision": DecisionCfg, "orchestrator": OrchestratorCfg, "agent": AgentCfg, "ocr": OcrCfg,
+        "perception": PerceptionCfg,
     }
     unknown = set(data) - set(sections)
     if unknown:

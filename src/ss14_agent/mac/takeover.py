@@ -13,6 +13,7 @@ import os
 import threading
 from typing import Callable
 
+import objc
 import Quartz
 from AppKit import NSWorkspace
 
@@ -37,6 +38,10 @@ class QuartzInputWatcher:
         ok = {"value": False}
 
         def callback(proxy, etype, event, refcon):
+            with objc.autorelease_pool():  # this thread has no pool of its own
+                return handle(etype, event)
+
+        def handle(etype, event):
             if etype in (Quartz.kCGEventTapDisabledByTimeout, Quartz.kCGEventTapDisabledByUserInput):
                 Quartz.CGEventTapEnable(self._tap, True)
                 return event

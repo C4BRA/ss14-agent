@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from .base import Skill, SkillContext, Status
-from .basic import Activate, Click, Explore, Inspect, KeyTap, Say, Wait
+from .basic import Activate, Click, Examine, Explore, Inspect, KeyTap, Say, Wait
 from .walk import WalkTo, astar
 
 __all__ = [
     "Skill", "SkillContext", "Status", "WalkTo", "astar",
-    "Click", "Activate", "Inspect", "KeyTap", "Say", "Wait", "Explore", "make_skill",
+    "Click", "Activate", "Inspect", "Examine", "KeyTap", "Say", "Wait", "Explore", "make_skill",
 ]
 
 
@@ -21,6 +21,8 @@ def make_skill(name: str, args: dict, reach: float) -> Skill:
         return Activate(args["world"], reach)
     if name == "inspect":
         return Inspect(args["world"])
+    if name == "examine":
+        return Examine(args["world"])
     if name == "explore":
         return Explore(args["dir"], args.get("target"))
     if name == "key":

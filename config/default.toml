@@ -23,10 +23,18 @@ tile_px = 0
 # Height of the window title bar in points, excluded from the regions above.
 # -1 = auto (0 when the window fills the screen, otherwise 28).
 titlebar_pt = -1
+# Screen areas covered by UI (buttons, hotbar, status icons) as [x, y, w, h]
+# fractions, like viewport. Markers and movement tracking ignore them. The chat
+# panel is always ignored. Example for the Default layout's bottom hotbar:
+# masks = [[0.0, 0.937, 0.71, 0.063]]
+masks = []
 
 [capture]
 # "auto" tries ScreenCaptureKit first (macOS 14+), then CGWindowListCreateImage.
 backend = "auto"
+# Most screenshots per second. Each one is a full-resolution copy of the window,
+# so higher rates cost a lot of memory bandwidth and GPU time.
+max_fps = 10
 
 [decision]
 # Provider: "openrouter" or "typesafe" (see src/ss14_agent/providers.py). The
@@ -72,8 +80,30 @@ reach_tiles = 1.4
 # Pause the agent as soon as you press a key or click in the game.
 # Press F8 to hand control back.
 takeover_on_input = true
+# Pause the agent if its memory use goes above this many MB, to protect the Mac.
+max_memory_mb = 2500
 # Save every decision's annotated frame under logs/.
 save_frames = true
+
+[perception]
+# What the decision model gets:
+#   "text"  - a tile map and a list of nearby things with names, plus chat and any
+#             menu/examine text, read from the screen by our own code. No image.
+#   "image" - the annotated screenshot (numbered yellow boxes).
+# Switchable live from the control window.
+mode = "text"
+# Whether the orchestrator also gets the screenshot (it always gets the text).
+orchestrator_image = true
+# Tile pictures learned from right-click menus are saved under data/tiles/<library>.
+# Use a different name per server if their sprites differ.
+library = "default"
+# How closely a tile must match a learned picture to reuse its name (0-1).
+match_threshold = 0.95
+# When idle, right-click unknown things within probe_radius tiles to learn what they are,
+# at most once every probe_interval_s seconds.
+auto_probe = true
+probe_radius = 6
+probe_interval_s = 2.5
 
 [ocr]
 # Seconds between OCR passes on the chat panel.

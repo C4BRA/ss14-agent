@@ -81,3 +81,22 @@ def test_markers_find_objects_and_space():
     assert [m.id for m in markers] == list(range(1, len(markers) + 1))
     assert all((m.dx, m.dy) != (0, 0) for m in markers)
     assert markers == sorted(markers, key=lambda m: m.dist)
+
+
+def test_masks_exclude_ui_overlays_from_markers():
+    cfg = fake_layout(load_config())
+    world = FakeWorld()
+    frame = world.frame()
+    g0 = compute_geometry(WIN, int(WIN.width), int(WIN.height), cfg.layout)
+    unmasked = {(s.dx, s.dy) for s in tile_stats(frame, g0)}
+    # Mask the top-right quarter of the content area, as a chat overlay would cover it.
+    cfg.layout.masks = [(0.5, 0.0, 0.5, 0.5)]
+    g = compute_geometry(WIN, int(WIN.width), int(WIN.height), cfg.layout)
+    assert len(g.masks) == 2
+    x, y = g.tile_to_px(5, -3)
+    assert g.masked(x, y)
+    assert not g.masked(*g.center)
+    kept = {(s.dx, s.dy) for s in tile_stats(frame, g)}
+    assert kept < unmasked
+    assert all(not g.masked(*g.tile_to_px(dx, dy)) for dx, dy in kept)
+    assert all(not g.masked(m.px, m.py) for m in find_markers(tile_stats(frame, g), g))

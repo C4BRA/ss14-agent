@@ -13,6 +13,8 @@ from .perception.tiles import Marker
 
 MARKER_COLOR = (255, 230, 0)
 PLAYER_COLOR = (0, 220, 255)
+# Label colours by how the name is known: right-click menu, learned picture, or not at all.
+SOURCE_COLORS = {"probed": (60, 220, 90), "learned": (255, 200, 60), "unknown": (170, 170, 170)}
 
 
 def _font(size: int):
@@ -30,17 +32,22 @@ def annotate(
     markers: list[Marker],
     width: int | None = None,
     draw_layout: bool = False,
+    labels: dict[int, tuple[str, str]] | None = None,
 ) -> Image.Image:
+    """labels: marker id -> (name, source) to write under each box, coloured by source."""
     img = Image.fromarray(frame)
     d = ImageDraw.Draw(img)
     t = geo.tile_px
     lw = max(2, int(t / 14))
     font = _font(max(12, int(t * 0.45)))
+    small = _font(max(11, int(t * 0.28)))
 
     if draw_layout:
         d.rectangle([geo.view_x, geo.view_y, geo.view_x + geo.view_w, geo.view_y + geo.view_h], outline=(0, 255, 0), width=lw)
         cx, cy, cw, ch = geo.chat_rect
         d.rectangle([cx, cy, cx + cw, cy + ch], outline=(255, 0, 255), width=lw)
+        for mx, my, mw, mh in geo.masks[1:]:
+            d.rectangle([mx, my, mx + mw, my + mh], outline=(255, 120, 0), width=lw)
         hx, hy = geo.half_tiles
         for gx in range(-hx, hx + 1):
             x, _ = geo.tile_to_px(gx - 0.5, 0)
@@ -61,6 +68,13 @@ def annotate(
         bbox = d.textbbox((lx, ly), label, font=font)
         d.rectangle([bbox[0] - 2, bbox[1] - 1, bbox[2] + 2, bbox[3] + 1], fill=(0, 0, 0))
         d.text((lx, ly), label, fill=MARKER_COLOR, font=font)
+        if labels and m.id in labels:
+            name, source = labels[m.id]
+            color = SOURCE_COLORS.get(source, MARKER_COLOR)
+            sx, sy = m.px - t / 2, m.py + t / 2 + 2
+            bbox = d.textbbox((sx, sy), name, font=small)
+            d.rectangle([bbox[0] - 2, bbox[1] - 1, bbox[2] + 2, bbox[3] + 1], fill=(0, 0, 0))
+            d.text((sx, sy), name, fill=color, font=small)
 
     if width and img.width > width:
         img = img.resize((width, int(img.height * width / img.width)), Image.LANCZOS)
