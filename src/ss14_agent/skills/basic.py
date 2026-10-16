@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import time
 
+from ..perception.library import tile_crop
 from ..perception.observer import Observation
 from .base import Skill, SkillContext, Status, dist_to, failed, ok, running, world_to_px
 from .walk import WalkTo
@@ -89,6 +90,7 @@ class Inspect(Skill):
         self.world = (float(world[0]), float(world[1]))
         self._t0: float | None = None
         self._click_px = (0.0, 0.0)
+        self._crop = None
 
     def describe(self) -> str:
         return f"inspect ({self.world[0]:.0f}, {self.world[1]:.0f})"
@@ -98,6 +100,8 @@ class Inspect(Skill):
             x, y = world_to_px(obs, self.world)
             if not obs.geo.in_view(x, y):
                 return failed("target is not on screen")
+            # Keep the tile's picture from before the menu covers it, to learn what it looks like.
+            self._crop = tile_crop(obs.frame, obs.geo, self.world[0] - obs.pos[0], self.world[1] - obs.pos[1]).copy()
             ctx.input.click(*obs.geo.px_to_screen(x, y), button="right")
             self._click_px = (x, y)
             self._t0 = time.monotonic()
@@ -114,8 +118,49 @@ class Inspect(Skill):
         ctx.input.tap("escape")
         if not lines:
             return failed("no menu text read")
-        ctx.on_label(self.world[0], self.world[1], lines[0])
+        ctx.on_label(self.world[0], self.world[1], lines[0], self._crop)
         return ok("it's: " + "; ".join(lines))
+
+
+class Examine(Skill):
+    """Shift+click shows SS14's examine text (name, description, status such as a tray's water level)."""
+
+    name = "examine"
+    wait_s = 0.5
+
+    def __init__(self, world: tuple[float, float]) -> None:
+        self.world = (float(world[0]), float(world[1]))
+        self._t0: float | None = None
+        self._click_px = (0.0, 0.0)
+
+    def describe(self) -> str:
+        return f"examine ({self.world[0]:.0f}, {self.world[1]:.0f})"
+
+    def tick(self, ctx: SkillContext, obs: Observation) -> Status:
+        if self._t0 is None:
+            x, y = world_to_px(obs, self.world)
+            if not obs.geo.in_view(x, y):
+                return failed("target is not on screen")
+            ctx.input.click(*obs.geo.px_to_screen(x, y), button="left", mods=("shift",))
+            self._click_px = (x, y)
+            self._t0 = time.monotonic()
+            return running()
+        if time.monotonic() - self._t0 < self.wait_s:
+            return running()
+        # The examine box opens next to the cursor; read a generous area around it.
+        t = obs.geo.tile_px
+        x, y = self._click_px
+        h, w, _ = obs.frame.shape
+        x0, y0 = int(max(0, x - 6 * t)), int(max(0, y - 5 * t))
+        x1, y1 = int(min(w, x + 8 * t)), int(min(h, y + 6 * t))
+        lines = [ln.text.strip() for ln in ctx.ocr.read(obs.frame[y0:y1, x0:x1]) if ln.confidence >= 0.4]
+        lines = [ln for ln in lines if len(ln) > 2][:8]
+        # Moving the cursor off the target lets the examine box close on its own.
+        ctx.input.mouse_move(*obs.geo.px_to_screen(*obs.geo.center))
+        if not lines:
+            return failed("no examine text read")
+        ctx.on_text(self.world[0], self.world[1], lines)
+        return ok("reads: " + " / ".join(lines))
 
 
 class KeyTap(_Timed):

@@ -37,8 +37,10 @@ class SkillContext:
     ocr: OcrEngine
     # Tiles the agent bumped into, in odometry coordinates. Shared across skills.
     blocked: set[tuple[int, int]] = field(default_factory=set)
-    # Called with (world_x, world_y, name) when a skill learns what something is.
-    on_label: Callable[[float, float, str], None] = lambda x, y, name: None
+    # Called with (world_x, world_y, name, tile_pixels) when a skill learns what something is.
+    on_label: Callable[..., None] = lambda x, y, name, crop=None: None
+    # Called with (world_x, world_y, lines) when a skill reads text about something (examine).
+    on_text: Callable[[float, float, list[str]], None] = lambda x, y, lines: None
     # Grab a fresh frame + observation on demand (used by skills that wait for UI).
     observe_now: Callable[[], Observation] | None = None
 

@@ -164,6 +164,9 @@ def cmd_decide_once(cfg: Config, args) -> int:
             if plan.say:
                 print(f"  Would say: {plan.say!r}")
         agent._results.clear()
+    if agent.text_mode:
+        print("What the decision model sees (text mode, no image):")
+        print(agent._scene(obs).as_text())
     print(f"Deciding with {cfg.decision.model}...")
     agent._decide(obs, "manual")
     d = agent.status.decision

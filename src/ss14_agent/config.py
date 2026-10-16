@@ -127,6 +127,19 @@ class AgentCfg:
 
 
 @dataclass
+class PerceptionCfg:
+    """How the decision model learns what's on screen."""
+
+    mode: str = "text"            # "text": map + named things, no image; "image": annotated screenshot
+    orchestrator_image: bool = True
+    library: str = "default"      # name of the learned tile library under data/tiles/
+    match_threshold: float = 0.95
+    auto_probe: bool = True       # right-click unknown things nearby when idle, to learn their names
+    probe_radius: float = 6.0
+    probe_interval_s: float = 2.5
+
+
+@dataclass
 class OcrCfg:
     chat_interval_s: float = 1.0
 
@@ -140,6 +153,7 @@ class Config:
     orchestrator: OrchestratorCfg = field(default_factory=OrchestratorCfg)
     agent: AgentCfg = field(default_factory=AgentCfg)
     ocr: OcrCfg = field(default_factory=OcrCfg)
+    perception: PerceptionCfg = field(default_factory=PerceptionCfg)
 
 
 def _merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
@@ -189,6 +203,7 @@ def load_config(path: str | Path | None = None) -> Config:
     sections = {
         "game": GameCfg, "layout": LayoutCfg, "capture": CaptureCfg,
         "decision": DecisionCfg, "orchestrator": OrchestratorCfg, "agent": AgentCfg, "ocr": OcrCfg,
+        "perception": PerceptionCfg,
     }
     unknown = set(data) - set(sections)
     if unknown:

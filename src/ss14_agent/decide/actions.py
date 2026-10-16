@@ -8,6 +8,7 @@ from typing import Any
 
 from ..memory import DIRECTIONS, WorldMemory, compass
 from ..perception.observer import Observation
+from ..perception.scene import TEXT_GUIDE, Scene
 from ..perception.tiles import Marker
 from ..playbook import Playbook
 
@@ -43,8 +44,10 @@ def build_actions(
     can_chat: bool,
     known: dict[int, str] | None = None,
     memory: WorldMemory | None = None,
+    text_mode: bool = False,
 ) -> list[ActionSpec]:
     known = known or {}
+    noun = "thing" if text_mode else "marker"
     acts: list[ActionSpec] = []
 
     def tried(skill: str, world: tuple[float, float]) -> str:
@@ -56,7 +59,7 @@ def build_actions(
         return f" You already tried this here {len(past)} time(s); last result: {past[-1]}."
 
     for m in obs.markers:
-        name = f"marker {m.id}" + (f" ({known[m.id]})" if m.id in known else "")
+        name = f"{noun} {m.id}" + (f" ({known[m.id]})" if m.id in known else "")
         where = _offset_text(m)
         tgt = {"world": m.world}
         acts.append(ActionSpec(
@@ -76,6 +79,12 @@ def build_actions(
         ))
         if m.id not in known:
             acts.append(ActionSpec(f"inspect:{m.id}", "inspect", f"Right-click {name} to read what it is.", tgt))
+        acts.append(ActionSpec(
+            f"examine:{m.id}", "examine",
+            f"Examine {name} (shift-click) to read its description and state, e.g. whether a plant needs "
+            "water or a machine is on." + tried("examine", m.world),
+            tgt,
+        ))
     for d, vec in DIRECTIONS.items():
         if memory is None:
             acts.append(ActionSpec(f"explore:{d}", "explore", f"Walk about 6 tiles {d} to explore.", {"dir": vec}))
@@ -128,20 +137,27 @@ def build_state(
     known: dict[int, str] | None = None,
     memory: WorldMemory | None = None,
     duty_info: dict[str, Any] | None = None,
+    scene: Scene | None = None,
 ) -> dict[str, Any]:
+    """The decision model's view of the situation. With a scene, the screen is described as text."""
     known = known or {}
     duty = playbook.duty(current_duty)
     state: dict[str, Any] = {
         "game": "Space Station 14, a multiplayer space station role-playing game.",
-        "how_to_read_the_screen": SCREEN_GUIDE,
+        "how_to_read_the_screen": TEXT_GUIDE if scene is not None else SCREEN_GUIDE,
         "your_role": f"{playbook.name}. {playbook.summary}",
         "current_duty": (
             {"id": duty.id, "goal": duty.description, "steps": duty.steps} if duty else "none chosen yet"
         ),
-        "markers_on_screen": [
+    }
+    if scene is not None:
+        state["what_you_see"] = scene.for_state()
+    else:
+        state["markers_on_screen"] = [
             {"number": m.id, "where": _offset_text(m), **({"identified_as": known[m.id]} if m.id in known else {})}
             for m in obs.markers
-        ],
+        ]
+    state |= {
         "new_chat_lines": obs.new_chat[-8:],
         "recent_chat": obs.recent_chat[-10:],
         "your_recent_actions": history[-10:],
@@ -156,7 +172,11 @@ def build_state(
     return state
 
 
-def build_questions(playbook: Playbook, actions: list[ActionSpec]) -> dict[str, dict[str, Any]]:
+def build_questions(playbook: Playbook, actions: list[ActionSpec], text_mode: bool = False) -> dict[str, dict[str, Any]]:
+    targets = (
+        "Things are numbered in what_you_see; unknown ones can be probed (inspect) to learn what they are. "
+        if text_mode else "Use the numbered markers in the image to choose targets. "
+    )
     return {
         "duty": {
             "type": "choice",
@@ -172,7 +192,7 @@ def build_questions(playbook: Playbook, actions: list[ActionSpec]) -> dict[str, 
             "instructions": (
                 "Pick the single next action that best moves the current duty forward, or answers "
                 "someone who just spoke to you. If the state has a plan_from_your_orchestrator, pick "
-                "the action that carries out its do_now step. Use the numbered markers in the image to choose targets. "
+                "the action that carries out its do_now step. " + targets +
                 "Don't repeat an action that just failed in the same way. When you need to find "
                 "something, explore toward unexplored areas instead of going back where you've been, "
                 "and use go_back to return to things you identified earlier."

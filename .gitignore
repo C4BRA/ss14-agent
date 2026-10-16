@@ -11,3 +11,4 @@ logs/
 snaps/
 config/local.toml
 .DS_Store
+data/

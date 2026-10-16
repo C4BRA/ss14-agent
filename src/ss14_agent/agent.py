@@ -1,7 +1,8 @@
 """The agent: a fast control loop (capture -> perceive -> run skill), a decision loop, and a planner.
 
     control thread, tick_hz:     grab frame, update odometry/markers/chat, tick the current skill
-    decision thread, on demand:  annotated screenshot + state + plan -> decision model -> next skill
+                                 (or, when idle, right-click an unknown thing to learn its name)
+    decision thread, on demand:  scene as text (or annotated screenshot) + state + plan -> decision model
     planner thread, every ~20 s: screenshot + state + memory -> orchestrator LLM -> goal and steps
 
 Decisions are requested when the current skill finishes, when new chat
@@ -29,9 +30,11 @@ from .annotate import annotate, to_jpeg_b64
 from .config import REPO_ROOT, Config
 from .decide.actions import ActionSpec, build_actions, build_questions, build_state
 from .decide.client import DecisionClient, DecisionError, DecisionResult
-from .memory import WorldMemory
+from .memory import WorldMemory, compass
 from .orchestrate import Orchestrator, OrchestratorError, Plan
+from .perception.library import TileLibrary
 from .perception.observer import Observation, Observer
+from .perception.scene import Scene, build_scene
 from .platform import Platform, WindowInfo
 from .skills import Skill, SkillContext, make_skill
 
@@ -67,6 +70,8 @@ class AgentStatus:
     log_count: int = 0
     plan: Plan | None = None
     plan_error: str = ""
+    scene_text: str = ""                # the screen as the decision model gets it in text mode
+    request_text: str = ""              # the state sent with the last decision call
 
 
 class Agent:
@@ -101,11 +106,17 @@ class Agent:
         self._history: deque[dict[str, str]] = deque(maxlen=20)
         self._notes: deque[str] = deque(maxlen=30)
         self.memory = WorldMemory()
+        self.library = TileLibrary(REPO_ROOT / "data" / "tiles" / cfg.perception.library,
+                                   cfg.perception.match_threshold)
+        self._read_text: deque[str] = deque(maxlen=12)
+        self._last_probe_at = 0.0
+        self._probe_tries: dict[tuple[int, int], int] = {}
         self._duty_since = time.monotonic()
         self._duty_actions = 0
         self._last_decision_at = 0.0
         self._last_say_at = -1e9
-        self.ctx = SkillContext(input=platform.input, ocr=platform.ocr, on_label=self._on_label)
+        self.ctx = SkillContext(input=platform.input, ocr=platform.ocr, on_label=self._on_label,
+                                on_text=self._on_text)
 
         self._threads: list[threading.Thread] = []
         self._trace_dir: Path | None = None
@@ -144,6 +155,7 @@ class Agent:
         self._end_skill(None)
         self.p.input.release_all()
         self.p.watcher.stop()
+        self.library.save()
         self.status.mode = "stopped"
         self._say("Agent stopped.")
 
@@ -178,9 +190,16 @@ class Agent:
         else:
             self.pause("F8")
 
-    def _on_label(self, x: float, y: float, name: str) -> None:
+    def _on_label(self, x: float, y: float, name: str, crop=None) -> None:
         self.memory.add_landmark(x, y, name)
         self._notes.append(f"Inspected something at ({x:.0f}, {y:.0f}): {name}")
+        if crop is not None and self.library.learn(crop, name):
+            self.library.save()
+
+    def _on_text(self, x: float, y: float, lines: list[str]) -> None:
+        name = self.memory.label_at((x, y)) or "something"
+        pos = self.status.pos
+        self._read_text.append(f"Examined {name} {compass(x - pos[0], y - pos[1])}: " + " / ".join(lines))
 
     def _say(self, msg: str) -> None:
         line = f"{time.strftime('%H:%M:%S')}  {msg}"
@@ -190,13 +209,32 @@ class Agent:
 
     # ---- control loop ----------------------------------------------------
 
-    def _known_labels(self, obs: Observation) -> dict[int, str]:
-        known: dict[int, str] = {}
-        for m in obs.markers:
-            name = self.memory.label_at(m.world)
-            if name:
-                known[m.id] = name
-        return known
+    @property
+    def text_mode(self) -> bool:
+        return self.cfg.perception.mode == "text"
+
+    def _scene(self, obs: Observation) -> Scene:
+        return build_scene(obs, self.memory, self.library, self.ctx.blocked, list(self._read_text))
+
+    def _maybe_probe(self, obs: Observation) -> bool:
+        """Right-click the nearest unknown thing to learn its name. Only when idle, and not too often."""
+        pc = self.cfg.perception
+        if not (self.text_mode and pc.auto_probe) or time.monotonic() - self._last_probe_at < pc.probe_interval_s:
+            return False
+        scene = self._scene(obs)
+        cands = []
+        for t in scene.unknown():
+            tile = (round(t.world[0]), round(t.world[1]))
+            if math.hypot(t.dx, t.dy) <= pc.probe_radius and self._probe_tries.get(tile, 0) < 2:
+                cands.append((math.hypot(t.dx, t.dy), tile, t))
+        if not cands:
+            return False
+        _, tile, t = min(cands, key=lambda c: c[0])
+        self._probe_tries[tile] = self._probe_tries.get(tile, 0) + 1
+        self._last_probe_at = time.monotonic()
+        self._start_skill(ActionSpec(f"probe:{t.id}", "inspect", f"Right-click thing {t.id} to learn what it is.",
+                                     {"world": t.world}), obs)
+        return True
 
     def _request_decision(self, reason: str) -> None:
         self._decision_reason = reason
@@ -333,6 +371,8 @@ class Agent:
                         self._say(f"   {self.status.skill} → {outcome}")
                         self._end_skill(outcome)
                         self._request_decision("idle")
+                elif self._maybe_probe(obs):
+                    pass
                 elif not self._decision_busy:
                     self._request_decision("idle")
                 if obs.new_chat:
@@ -342,8 +382,10 @@ class Agent:
                     self._request_decision("heartbeat")
 
             if self.observer._n % 3 == 0:
-                img = annotate(obs.frame, obs.geo, obs.markers, width=900)
-                self.preview = img
+                scene = self._scene(obs)
+                labels = {t.id: (t.label or "?", t.source) for t in scene.things}
+                self.preview = annotate(obs.frame, obs.geo, obs.markers, width=900, labels=labels)
+                self.status.scene_text = scene.as_text()
             now = time.monotonic()
             self.status.fps = 0.9 * self.status.fps + 0.1 * (1.0 / max(now - last, 1e-3))
             last = now
@@ -375,7 +417,7 @@ class Agent:
                 self._decision_busy = False
                 self._last_decision_at = time.monotonic()
 
-    def _state(self, obs: Observation, known: dict[int, str]) -> dict[str, Any]:
+    def _state(self, obs: Observation, known: dict[int, str], scene: Scene | None = None) -> dict[str, Any]:
         duty_info = None
         if self.status.duty:
             duty_info = {
@@ -383,7 +425,7 @@ class Agent:
                 "actions_taken_on_this_duty": self._duty_actions,
             }
         return build_state(obs, self.playbook, self.status.duty, list(self._history), list(self._notes),
-                           self.operator_note, known, self.memory, duty_info)
+                           self.operator_note, known, self.memory, duty_info, scene)
 
     def _set_duty(self, duty: str, why: str) -> None:
         if duty != self.status.duty:
@@ -393,18 +435,26 @@ class Agent:
         self.status.duty = duty
 
     def _decide(self, obs: Observation, reason: str) -> None:
-        known = self._known_labels(obs)
+        text = self.text_mode
+        scene = self._scene(obs)
+        known = scene.labels()
         can_chat = time.monotonic() - self._last_say_at > self.cfg.agent.chat_cooldown_s
-        actions = build_actions(obs, self.playbook, self.cfg.agent.reach_tiles, can_chat, known, self.memory)
+        actions = build_actions(obs, self.playbook, self.cfg.agent.reach_tiles, can_chat, known, self.memory, text)
         plan = self.status.plan
         if plan is not None and plan.say and can_chat:
             actions.append(ActionSpec("say:plan", "say", f'Say in local chat: "{plan.say}"', {"text": plan.say}))
-        state = self._state(obs, known)
+        state = self._state(obs, known, scene if text else None)
         if plan is not None:
             state["plan_from_your_orchestrator"] = plan.for_state()
-        questions = build_questions(self.playbook, actions)
-        img = annotate(obs.frame, obs.geo, obs.markers, width=self.cfg.decision.image_width)
-        b64 = to_jpeg_b64(img)
+        questions = build_questions(self.playbook, actions, text)
+        labels = {t.id: (t.label or "?", t.source) for t in scene.things}
+        img = annotate(obs.frame, obs.geo, obs.markers, width=self.cfg.decision.image_width, labels=labels)
+        # In text mode the model gets no picture at all; the frame is still saved to the trace.
+        b64 = None if text else to_jpeg_b64(img)
+        self.status.request_text = json.dumps(
+            {"state": state, "options": {k: v for k, v in questions["action"]["criteria"].items()},
+             "image": "none" if text else "annotated screenshot"},
+            indent=1, ensure_ascii=False, default=str)
         try:
             result = self.client.decide(state, questions, b64)
         except DecisionError as exc:
@@ -467,11 +517,15 @@ class Agent:
             self._last_plan_at = time.monotonic()
 
     def _plan(self, obs: Observation, reason: str) -> None:
-        state = self._state(obs, self._known_labels(obs))
-        img = annotate(obs.frame, obs.geo, obs.markers, width=self.cfg.orchestrator.image_width)
+        scene = self._scene(obs)
+        state = self._state(obs, scene.labels(), scene if self.text_mode else None)
+        b64 = None
+        if self.cfg.perception.orchestrator_image or not self.text_mode:
+            img = annotate(obs.frame, obs.geo, obs.markers, width=self.cfg.orchestrator.image_width)
+            b64 = to_jpeg_b64(img)
         duties = [d.id for d in self.playbook.duties]
         try:
-            plan = self.orchestrator.plan(state, duties, to_jpeg_b64(img), self.status.plan)
+            plan = self.orchestrator.plan(state, duties, b64, self.status.plan)
         except OrchestratorError as exc:
             self.status.plan_error = str(exc)
             self._say(f"Planning failed: {exc}")

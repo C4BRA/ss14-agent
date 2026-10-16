@@ -7,7 +7,7 @@ from PySide6.QtGui import QFont, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget,
+    QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from .. import playbook as playbooks
@@ -44,10 +44,21 @@ class ControlWindow(QMainWindow):
         )
         self.on_top.toggled.connect(lambda _: self._apply_window_mode())
         self._mode: tuple[bool, bool] | None = None
+        self.sees = QComboBox()
+        self.sees.addItem("Text (no image)", "text")
+        self.sees.addItem("Screenshot", "image")
+        self.sees.setCurrentIndex(max(0, self.sees.findData(cfg.perception.mode)))
+        self.sees.setToolTip(
+            "What the decision model gets. Text: a tile map and named things read from the screen by "
+            "our own code. Screenshot: the annotated image. Takes effect on the next decision."
+        )
+        self.sees.currentIndexChanged.connect(lambda _: setattr(cfg.perception, "mode", self.sees.currentData()))
         top = QHBoxLayout()
         top.addWidget(QLabel("Job:"))
         top.addWidget(self.playbook)
         top.addWidget(self.note, 1)
+        top.addWidget(QLabel("Model sees:"))
+        top.addWidget(self.sees)
         top.addWidget(self.start_btn)
         top.addWidget(self.pause_btn)
         top.addWidget(self.on_top)
@@ -61,10 +72,31 @@ class ControlWindow(QMainWindow):
         self.view.setAlignment(Qt.AlignCenter)
         self.view.setMinimumSize(560, 360)
         self.view.setStyleSheet("background:#111;color:#aaa;")
+        self.view.setToolTip("Labels under the boxes: green = read from a right-click menu, "
+                             "amber = recognised from a learned picture, grey = unknown.")
+
+        # What the decision model receives in text mode, and the raw state of the last call.
+        self.scene_view = QPlainTextEdit()
+        self.scene_view.setReadOnly(True)
+        mono = QFont("Menlo", 12)
+        mono.setStyleHint(QFont.Monospace)
+        self.scene_view.setFont(mono)
+        self.scene_view.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.scene_view.setPlaceholderText("The map and named things appear here once the agent is running.")
+        self.request_view = QPlainTextEdit()
+        self.request_view.setReadOnly(True)
+        self.request_view.setFont(QFont("Menlo", 11))
+        self.request_view.setPlaceholderText("The state sent with the last decision call appears here.")
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self.view, "Screen")
+        self.tabs.addTab(self.scene_view, "Model view")
+        self.tabs.addTab(self.request_view, "Last request")
+        self._scene_text = ""
+        self._request_text = ""
 
         # Status + decision panel
         self.fields = {k: QLabel("–") for k in
-                       ("Mode", "Window", "Loop", "Position", "Goal", "Plan step", "Duty", "Doing", "Decision",
+                       ("Mode", "Window", "Loop", "Position", "Learned", "Goal", "Plan step", "Duty", "Doing", "Decision",
                         "Chat / danger", "Latency")}
         form = QFormLayout()
         for k, lbl in self.fields.items():
@@ -90,7 +122,7 @@ class ControlWindow(QMainWindow):
         right_w.setLayout(right)
 
         upper = QSplitter(Qt.Horizontal)
-        upper.addWidget(self.view)
+        upper.addWidget(self.tabs)
         upper.addWidget(right_w)
         upper.setStretchFactor(0, 3)
         upper.setStretchFactor(1, 2)
@@ -195,6 +227,17 @@ class ControlWindow(QMainWindow):
         self.fields["Window"].setText(s.window or "–")
         self.fields["Loop"].setText(f"{s.fps:.0f} fps")
         self.fields["Position"].setText(f"{s.pos[0]:+.1f}, {s.pos[1]:+.1f} tiles from start")
+        lib = a.library
+        self.fields["Learned"].setText(f"{len(lib.names)} things from {len(lib)} pictures")
+        if s.scene_text != self._scene_text:
+            self._scene_text = s.scene_text
+            self.scene_view.setPlainText(s.scene_text)
+        if s.request_text != self._request_text:
+            self._request_text = s.request_text
+            bar = self.request_view.verticalScrollBar()
+            keep = bar.value()
+            self.request_view.setPlainText(s.request_text)
+            bar.setValue(keep)
         if s.plan is not None and not s.plan_error:
             self.orch_row.report(True, f"last plan {s.plan.latency_ms / 1000:.1f} s")
         if s.plan is not None:
