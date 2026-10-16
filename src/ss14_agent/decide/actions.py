@@ -45,7 +45,10 @@ def build_actions(
     known: dict[int, str] | None = None,
     memory: WorldMemory | None = None,
     text_mode: bool = False,
+    window_open: bool | None = None,
 ) -> list[ActionSpec]:
+    """window_open: whether a window or menu is on screen, when known. Escape with nothing open
+    brings up the game menu, so close_window is only offered when one might be open."""
     known = known or {}
     noun = "thing" if text_mode else "marker"
     acts: list[ActionSpec] = []
@@ -114,11 +117,14 @@ def build_actions(
         ActionSpec("use_held", "key", "Use the item in your active hand (Z), e.g. turn on a tool.", {"key": "z"}),
         ActionSpec("drop", "key", "Drop the item in your active hand (Q).", {"key": "q"}),
         ActionSpec("swap_hands", "key", "Switch to your other hand (X).", {"key": "x"}),
-        ActionSpec(
+    ]
+    if window_open is not False:
+        acts.append(ActionSpec(
             "close_window", "key",
             "Press Escape once to close an open window or menu. Only if a window or menu is open.",
             {"key": "escape"},
-        ),
+        ))
+    acts += [
         ActionSpec("wait", "wait", "Wait and watch for a moment.", {"seconds": 1.5}),
     ]
     if can_chat:

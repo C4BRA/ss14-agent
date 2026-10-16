@@ -34,7 +34,7 @@ from .memory import WorldMemory, compass
 from .orchestrate import Orchestrator, OrchestratorError, Plan
 from .perception.library import TileLibrary
 from .perception.observer import Observation, Observer
-from .perception.scene import Scene, build_scene
+from .perception.scene import Scene, build_scene, read_screen_text
 from .platform import Platform, WindowInfo
 from .skills import Skill, SkillContext, make_skill
 
@@ -111,6 +111,8 @@ class Agent:
         self._read_text: deque[str] = deque(maxlen=12)
         self._last_probe_at = 0.0
         self._probe_tries: dict[tuple[int, int], int] = {}
+        # (action id, tile it was tried from) -> times it failed; used to stop retrying the same thing.
+        self._failures: dict[tuple[str, tuple[int, int]], list[float]] = {}
         self._duty_since = time.monotonic()
         self._duty_actions = 0
         self._last_decision_at = 0.0
@@ -250,6 +252,9 @@ class Agent:
                 self.memory.record(spec.skill, spec.args.get("world"), outcome)
                 self._duty_actions += 1
                 self._fails_in_row = self._fails_in_row + 1 if outcome.startswith("failed") else 0
+                if outcome.startswith("failed"):
+                    here = (round(self.status.pos[0]), round(self.status.pos[1]))
+                    self._failures.setdefault((spec.id, here), []).append(time.monotonic())
                 if self._fails_in_row >= 2:
                     self._request_plan("repeated failures")
         self._skill = None
@@ -427,6 +432,22 @@ class Agent:
         return build_state(obs, self.playbook, self.status.duty, list(self._history), list(self._notes),
                            self.operator_note, known, self.memory, duty_info, scene)
 
+    def _drop_repeat_failures(self, actions: list[ActionSpec], obs: Observation) -> list[ActionSpec]:
+        """Leave out actions that already failed twice from this spot in the last 30 s.
+
+        Telling the model "don't repeat failures" wasn't enough: with every option
+        failing it kept cycling through them. Off the menu, it has to try something else.
+        """
+        now = time.monotonic()
+        here = (round(obs.pos[0]), round(obs.pos[1]))
+        self._failures = {k: [t for t in v if now - t < 30] for k, v in self._failures.items()}
+        self._failures = {k: v for k, v in self._failures.items() if v}
+        out = [a for a in actions if a.id == "wait" or len(self._failures.get((a.id, here), [])) < 2]
+        dropped = len(actions) - len(out)
+        if dropped:
+            self._notes.append(f"Left out {dropped} action(s) that already failed twice from here.")
+        return out
+
     def _set_duty(self, duty: str, why: str) -> None:
         if duty != self.status.duty:
             self._say(f"Duty: {duty} ({why})")
@@ -437,9 +458,19 @@ class Agent:
     def _decide(self, obs: Observation, reason: str) -> None:
         text = self.text_mode
         scene = self._scene(obs)
+        window_open = None
+        if text:
+            try:
+                scene.screen_text = read_screen_text(obs, self.p.ocr)
+                window_open = bool(scene.screen_text)
+            except RuntimeError as exc:  # OCR trouble shouldn't stop the decision
+                log.warning("Screen OCR failed: %s", exc)
+            self.status.scene_text = scene.as_text()
         known = scene.labels()
         can_chat = time.monotonic() - self._last_say_at > self.cfg.agent.chat_cooldown_s
-        actions = build_actions(obs, self.playbook, self.cfg.agent.reach_tiles, can_chat, known, self.memory, text)
+        actions = build_actions(obs, self.playbook, self.cfg.agent.reach_tiles, can_chat, known, self.memory, text,
+                                window_open)
+        actions = self._drop_repeat_failures(actions, obs)
         plan = self.status.plan
         if plan is not None and plan.say and can_chat:
             actions.append(ActionSpec("say:plan", "say", f'Say in local chat: "{plan.say}"', {"text": plan.say}))

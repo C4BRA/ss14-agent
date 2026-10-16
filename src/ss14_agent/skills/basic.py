@@ -115,9 +115,10 @@ class Inspect(Skill):
         x1, y1 = int(min(w, x + 9 * t)), int(min(h, y + 7 * t))
         lines = [ln.text.strip() for ln in ctx.ocr.read(obs.frame[y0:y1, x0:x1]) if ln.confidence >= 0.4]
         lines = [ln for ln in lines if len(ln) > 1][:5]
-        ctx.input.tap("escape")
         if not lines:
+            # No menu showed up (or nothing was read). Escape now would open the game menu instead.
             return failed("no menu text read")
+        ctx.input.tap("escape")
         ctx.on_label(self.world[0], self.world[1], lines[0], self._crop)
         return ok("it's: " + "; ".join(lines))
 

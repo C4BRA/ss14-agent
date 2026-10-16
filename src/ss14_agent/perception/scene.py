@@ -27,7 +27,8 @@ TEXT_GUIDE = (
     "darkness (you can't walk there), x is somewhere you bumped into, a blank is hidden behind "
     "the game's UI, and digits or capital letters are things you can target. `what_you_see.things` "
     "says what each one is and how sure that is: probed (read from the game's right-click menu), "
-    "learned (looks like something probed before) or unknown. Actions refer to things by number."
+    "learned (looks like something probed before) or unknown. Actions refer to things by number. "
+    "`text_on_screen_now` is any text visible over the game view, such as an open window or menu."
 )
 
 
@@ -63,6 +64,7 @@ class Scene:
     chat: list[str] = field(default_factory=list)
     new_chat: list[str] = field(default_factory=list)
     read_text: list[str] = field(default_factory=list)   # menu and examine text read recently
+    screen_text: list[str] | None = None                 # text on the game view now (open windows, popups)
 
     def labels(self) -> dict[int, str]:
         return {t.id: t.label for t in self.things if t.label}
@@ -78,6 +80,8 @@ class Scene:
             item["how_sure"] = t.source if t.source != "learned" else f"learned ({t.score:.0%} match)"
             things.append(item)
         out: dict[str, Any] = {"map": self.rows, "things": things}
+        if self.screen_text is not None:
+            out["text_on_screen_now"] = self.screen_text or "none: no window or menu is open"
         if self.read_text:
             out["text_read_from_the_game"] = self.read_text[-6:]
         return out
@@ -88,11 +92,28 @@ class Scene:
         for t in self.things:
             sure = {"probed": "probed", "unknown": "unknown"}.get(t.source, f"learned {t.score:.0%}")
             lines.append(f"  {t.char}  {t.label or '?':<28} {t.where:<8} [{sure}]")
+        if self.screen_text:
+            lines += ["", "TEXT ON SCREEN NOW", *(f"  {s}" for s in self.screen_text)]
         if self.read_text:
             lines += ["", "TEXT READ FROM THE GAME", *(f"  {s}" for s in self.read_text[-6:])]
         if self.chat:
             lines += ["", "CHAT", *(f"  {s}" for s in self.chat[-8:])]
         return "\n".join(lines)
+
+
+def read_screen_text(obs: Observation, ocr, max_lines: int = 20) -> list[str]:
+    """OCR the game view (not the chat or masked UI) for windows, menus and popups."""
+    geo = obs.geo
+    x0, y0 = int(geo.view_x), int(geo.view_y)
+    view = obs.frame[y0:int(geo.view_y + geo.view_h):2, x0:int(geo.view_x + geo.view_w):2]
+    out = []
+    for ln in ocr.read(view):
+        text = ln.text.strip()
+        bx, by, bw, bh = ln.box
+        cx, cy = x0 + 2 * (bx + bw / 2), y0 + 2 * (by + bh / 2)
+        if ln.confidence >= 0.4 and len(text) > 1 and not geo.masked(cx, cy):
+            out.append(text)
+    return out[:max_lines]
 
 
 def build_scene(

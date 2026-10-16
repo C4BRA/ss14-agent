@@ -125,3 +125,45 @@ def test_examine_reads_text_with_shift_click():
     sk._t0 -= 1
     st = sk.tick(ctx, obs)
     assert st.state == "ok" and got == [["Hydroponics tray", "It needs water."]]
+
+
+def test_walk_never_gives_up_on_a_bad_map():
+    from ss14_agent.skills import WalkTo
+    obs = _obs()
+    inp = fake_platform().input
+    ctx = SkillContext(input=inp, ocr=FakeOcr())
+    # Walled in by old bumps and darkness on every side: still heads for the goal.
+    ctx.blocked |= {(x, y) for x in range(-1, 2) for y in range(-1, 2)} - {(0, 0)}
+    obs.space |= {(x, y) for x in range(-3, 4) for y in range(-3, 4)} - {(0, 0)}
+    sk = WalkTo((5, 0))
+    sk.start(ctx, obs)
+    st = sk.tick(ctx, obs)
+    assert st.state == "running" and "d" in inp.held()
+    assert not ctx.blocked & {(1, 0), (-1, 0)}       # the nearby bumps were forgotten
+
+
+def test_close_window_only_when_something_is_open():
+    from ss14_agent import playbook as playbooks
+    from ss14_agent.decide.actions import build_actions
+    obs = _obs()
+    pb = playbooks.load("janitor")
+
+    def ids(window_open):
+        return {a.id for a in build_actions(obs, pb, 1.4, False, {}, None, True, window_open)}
+
+    assert "close_window" not in ids(False)
+    assert "close_window" in ids(True) and "close_window" in ids(None)
+
+
+def test_actions_that_keep_failing_leave_the_menu(tmp_path, monkeypatch):
+    import time as _t
+    monkeypatch.setattr("ss14_agent.agent.REPO_ROOT", tmp_path)
+    cfg = fake_layout(load_config())
+    cfg.orchestrator.enabled = False
+    client = RecordingClient()
+    agent = Agent(cfg, fake_platform(FakeWorld()), "janitor", client=client)
+    obs = _obs()
+    agent._failures[("explore:west", (0, 0))] = [_t.monotonic(), _t.monotonic()]
+    agent._decide(obs, "manual")
+    opts = client.calls[-1][1]["action"]["criteria"]
+    assert "explore:west" not in opts and "explore:east" in opts
