@@ -66,6 +66,7 @@ cp .env.example .env        # then paste your OpenRouter key into .env
 - The **live view** shows exactly what the model sees: the game with numbered markers, and your character in cyan.
 - **Status** shows the current duty, the skill running, the last decision with its confidence, the "spoken to" and "danger" readings, and API latency.
 - **Top options** lists the probabilities the model gave its best choices.
+- **Overlay** floats the window above the game without taking focus, so you can watch while the game keeps keyboard focus. The agent captures the game window directly, so covering it doesn't affect what the model sees. While the agent runs, clicks pass through the window to the game; press **F8** to pause and use the buttons.
 - Every decision is logged to `logs/<time>/decisions.jsonl`, with the image it saw in `logs/<time>/frames/`.
 
 ## Commands

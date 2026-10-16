@@ -35,8 +35,13 @@ class ControlWindow(QMainWindow):
         self.pause_btn = QPushButton("Pause (F8)")
         self.pause_btn.setEnabled(False)
         self.pause_btn.clicked.connect(self._toggle_pause)
-        self.on_top = QCheckBox("Keep on top")
-        self.on_top.toggled.connect(self._toggle_on_top)
+        self.on_top = QCheckBox("Overlay")
+        self.on_top.setToolTip(
+            "Float this window above the game without taking focus. While the agent runs, "
+            "clicks pass through it to the game; press F8 to pause and use the buttons."
+        )
+        self.on_top.toggled.connect(lambda _: self._apply_window_mode())
+        self._mode: tuple[bool, bool] | None = None
         top = QHBoxLayout()
         top.addWidget(QLabel("Job:"))
         top.addWidget(self.playbook)
@@ -143,13 +148,29 @@ class ControlWindow(QMainWindow):
         if self.agent is not None:
             self.agent.operator_note = text
 
-    def _toggle_on_top(self, on: bool) -> None:
-        self.setWindowFlag(Qt.WindowStaysOnTopHint, on)
+    def _apply_window_mode(self) -> None:
+        """Overlay: stay above the game and never take keyboard focus from it.
+
+        The agent's keys and clicks go to the focused app at the cursor, so the
+        game must stay focused and this window must not catch the clicks. The
+        agent captures the game window itself, so covering it doesn't matter.
+        """
+        overlay = self.on_top.isChecked()
+        running = self.agent is not None and not self.agent.paused
+        mode = (overlay, overlay and running)
+        if mode == self._mode:
+            return
+        self._mode = mode
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, overlay)
+        self.setWindowFlag(Qt.WindowDoesNotAcceptFocus, overlay)
+        self.setWindowFlag(Qt.WindowTransparentForInput, mode[1])
+        self.setWindowOpacity(0.85 if mode[1] else 1.0)
         self.show()
 
     # ---- refresh --------------------------------------------------------
 
     def _refresh(self) -> None:
+        self._apply_window_mode()
         a = self.agent
         if a is None:
             return
