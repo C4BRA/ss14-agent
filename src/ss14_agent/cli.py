@@ -79,7 +79,7 @@ def cmd_snap(cfg: Config, args) -> int:
     print(f"Saved {out}")
     print(f"  scale {g.scale:.2f} px/pt, title bar {g.content_top:.0f} px, tile {g.tile_px:.1f} px")
     print(f"  game view {g.view_w:.0f}x{g.view_h:.0f} px at ({g.view_x:.0f}, {g.view_y:.0f}); {len(obs.markers)} markers")
-    print("  Green box = game viewport, magenta = chat panel, cyan = you, yellow = markers.")
+    print("  Green box = game viewport, magenta = chat panel, orange = masked UI, cyan = you, yellow = markers.")
     print("  If they don't line up, adjust [layout] in config/local.toml and run snap again.")
     if args.ocr:
         x, y, w, h = (int(v) for v in g.chat_rect)
