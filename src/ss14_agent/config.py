@@ -29,6 +29,7 @@ class LayoutCfg:
     viewport_tiles_wide: int = 21
     tile_px: float = 0
     titlebar_pt: float = -1
+    masks: list[Rect] = field(default_factory=list)
 
 
 @dataclass
@@ -95,7 +96,11 @@ def _section(cls, data: dict[str, Any]):
     for k, v in data.items():
         if k not in known:
             raise ValueError(f"Unknown setting '{k}' in [{cls.__name__.removesuffix('Cfg').lower()}]")
-        kwargs[k] = tuple(v) if isinstance(v, list) and k in ("viewport", "chat") else v
+        if k in ("viewport", "chat") and isinstance(v, list):
+            v = tuple(v)
+        elif k == "masks":
+            v = [tuple(r) for r in v]
+        kwargs[k] = v
     return cls(**kwargs)
 
 

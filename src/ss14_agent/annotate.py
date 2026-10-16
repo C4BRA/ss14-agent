@@ -41,6 +41,8 @@ def annotate(
         d.rectangle([geo.view_x, geo.view_y, geo.view_x + geo.view_w, geo.view_y + geo.view_h], outline=(0, 255, 0), width=lw)
         cx, cy, cw, ch = geo.chat_rect
         d.rectangle([cx, cy, cx + cw, cy + ch], outline=(255, 0, 255), width=lw)
+        for mx, my, mw, mh in geo.masks[1:]:
+            d.rectangle([mx, my, mx + mw, my + mh], outline=(255, 120, 0), width=lw)
         hx, hy = geo.half_tiles
         for gx in range(-hx, hx + 1):
             x, _ = geo.tile_to_px(gx - 0.5, 0)
