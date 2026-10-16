@@ -22,7 +22,7 @@ def make_skill(name: str, args: dict, reach: float) -> Skill:
     if name == "inspect":
         return Inspect(args["world"])
     if name == "explore":
-        return Explore(args["dir"])
+        return Explore(args["dir"], args.get("target"))
     if name == "key":
         return KeyTap(args["key"])
     if name == "say":

@@ -28,6 +28,7 @@ from .annotate import annotate, to_jpeg_b64
 from .config import REPO_ROOT, Config
 from .decide.actions import ActionSpec, build_actions, build_questions, build_state
 from .decide.client import DecisionClient, DecisionError, DecisionResult
+from .memory import WorldMemory
 from .perception.observer import Observation, Observer
 from .platform import Platform, WindowInfo
 from .skills import Skill, SkillContext, make_skill
@@ -90,7 +91,9 @@ class Agent:
         self._skill_spec: ActionSpec | None = None
         self._history: deque[dict[str, str]] = deque(maxlen=20)
         self._notes: deque[str] = deque(maxlen=30)
-        self._labels: deque[tuple[float, float, str]] = deque(maxlen=60)
+        self.memory = WorldMemory()
+        self._duty_since = time.monotonic()
+        self._duty_actions = 0
         self._last_decision_at = 0.0
         self._last_say_at = -1e9
         self.ctx = SkillContext(input=platform.input, ocr=platform.ocr, on_label=self._on_label)
@@ -163,7 +166,7 @@ class Agent:
             self.pause("F8")
 
     def _on_label(self, x: float, y: float, name: str) -> None:
-        self._labels.append((x, y, name))
+        self.memory.add_landmark(x, y, name)
         self._notes.append(f"Inspected something at ({x:.0f}, {y:.0f}): {name}")
 
     def _say(self, msg: str) -> None:
@@ -177,12 +180,9 @@ class Agent:
     def _known_labels(self, obs: Observation) -> dict[int, str]:
         known: dict[int, str] = {}
         for m in obs.markers:
-            best = min(
-                ((math.hypot(m.world[0] - x, m.world[1] - y), n) for x, y, n in self._labels),
-                default=(9e9, ""),
-            )
-            if best[0] < 0.7:
-                known[m.id] = best[1]
+            name = self.memory.label_at(m.world)
+            if name:
+                known[m.id] = name
         return known
 
     def _request_decision(self, reason: str) -> None:
@@ -193,7 +193,11 @@ class Agent:
         if self._skill is not None:
             self._skill.stop(self.ctx)
             if outcome is not None and self._skill_spec is not None:
-                self._history.append({"action": self._skill_spec.description, "result": outcome})
+                spec = self._skill_spec
+                self._history.append({"duty": self.status.duty or "-", "action": spec.id,
+                                      "what": spec.description, "result": outcome})
+                self.memory.record(spec.skill, spec.args.get("world"), outcome)
+                self._duty_actions += 1
         self._skill = None
         self._skill_spec = None
         self.status.skill = ""
@@ -231,8 +235,25 @@ class Agent:
                 continue
             if self._skill is None:
                 self._start_skill(spec, obs)
-            elif reason in ("chat", "heartbeat") and not self._same_target(spec, self._skill_spec) and spec.skill != "wait":
+            elif self._should_interrupt(reason, result, spec):
                 self._start_skill(spec, obs)
+
+    def _should_interrupt(self, reason: str, result: DecisionResult, spec: ActionSpec) -> bool:
+        """Whether a fresh decision may cut short the skill that's running.
+
+        Letting every heartbeat swap the plan made the agent dither: two near-equal
+        options would alternate and it never got anywhere. Now a running skill is only
+        replaced for chat, danger, or a heartbeat pick the model is confident about.
+        """
+        if reason not in ("chat", "heartbeat") or spec.skill == "wait" or self._same_target(spec, self._skill_spec):
+            return False
+        a = result.answers
+        if "danger" in a and a["danger"].yes > 0.6:
+            return True
+        if reason == "chat":
+            return "spoken_to" in a and a["spoken_to"].yes > 0.5
+        act = a.get("action")
+        return act is not None and act.confidence >= 0.6
 
     def _pick(self, result: DecisionResult, actions: list[ActionSpec]) -> ActionSpec | None:
         by_id = {a.id: a for a in actions}
@@ -276,6 +297,7 @@ class Agent:
             with self._lock:
                 self._latest_obs = obs
             self.status.pos = obs.pos
+            self.memory.update(obs)
 
             if self._paused.is_set():
                 self.status.mode = "paused"
@@ -335,9 +357,15 @@ class Agent:
     def _decide(self, obs: Observation, reason: str) -> None:
         known = self._known_labels(obs)
         can_chat = time.monotonic() - self._last_say_at > self.cfg.agent.chat_cooldown_s
-        actions = build_actions(obs, self.playbook, self.cfg.agent.reach_tiles, can_chat, known)
+        actions = build_actions(obs, self.playbook, self.cfg.agent.reach_tiles, can_chat, known, self.memory)
+        duty_info = None
+        if self.status.duty:
+            duty_info = {
+                "minutes_on_this_duty": round((time.monotonic() - self._duty_since) / 60, 1),
+                "actions_taken_on_this_duty": self._duty_actions,
+            }
         state = build_state(obs, self.playbook, self.status.duty, list(self._history), list(self._notes),
-                            self.operator_note, known)
+                            self.operator_note, known, self.memory, duty_info)
         questions = build_questions(self.playbook, actions)
         img = annotate(obs.frame, obs.geo, obs.markers, width=self.cfg.decision.image_width)
         b64 = to_jpeg_b64(img)
@@ -354,6 +382,8 @@ class Agent:
         if duty and duty.choice:
             if duty.choice != self.status.duty:
                 self._say(f"Duty: {duty.choice} ({duty.confidence:.0%})")
+                self._duty_since = time.monotonic()
+                self._duty_actions = 0
             self.status.duty = duty.choice
         act = a.get("action")
         top = sorted((act.probabilities if act else {}).items(), key=lambda kv: -kv[1])[:8]

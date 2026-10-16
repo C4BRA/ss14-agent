@@ -174,8 +174,9 @@ class Explore(Skill):
     name = "explore"
     distance = 6
 
-    def __init__(self, direction: tuple[int, int]) -> None:
+    def __init__(self, direction: tuple[int, int], target: tuple[float, float] | None = None) -> None:
         self.direction = direction
+        self.target = target       # nearest unseen area that way, from WorldMemory
         self._walk: WalkTo | None = None
         self._start = (0.0, 0.0)
 
@@ -185,8 +186,11 @@ class Explore(Skill):
 
     def start(self, ctx: SkillContext, obs: Observation) -> None:
         self._start = obs.pos
-        tx = obs.pos[0] + self.direction[0] * self.distance
-        ty = obs.pos[1] + self.direction[1] * self.distance
+        if self.target is not None:
+            tx, ty = self.target
+        else:
+            tx = obs.pos[0] + self.direction[0] * self.distance
+            ty = obs.pos[1] + self.direction[1] * self.distance
         self._walk = WalkTo((tx, ty), stop_within=1.0)
         self._walk.start(ctx, obs)
 
