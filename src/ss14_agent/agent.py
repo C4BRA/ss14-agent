@@ -1,7 +1,8 @@
-"""The agent: a fast control loop (capture -> perceive -> run skill) and a decision loop beside it.
+"""The agent: a fast control loop (capture -> perceive -> run skill), a decision loop, and a planner.
 
-    control thread, tick_hz:   grab frame, update odometry/markers/chat, tick the current skill
-    decision thread, on demand: annotated screenshot + state -> decision model -> next skill
+    control thread, tick_hz:     grab frame, update odometry/markers/chat, tick the current skill
+    decision thread, on demand:  annotated screenshot + state + plan -> decision model -> next skill
+    planner thread, every ~20 s: screenshot + state + memory -> orchestrator LLM -> goal and steps
 
 Decisions are requested when the current skill finishes, when new chat
 appears, or on a heartbeat. The character keeps moving while a decision is
@@ -28,6 +29,8 @@ from .annotate import annotate, to_jpeg_b64
 from .config import REPO_ROOT, Config
 from .decide.actions import ActionSpec, build_actions, build_questions, build_state
 from .decide.client import DecisionClient, DecisionError, DecisionResult
+from .memory import WorldMemory
+from .orchestrate import Orchestrator, OrchestratorError, Plan
 from .perception.observer import Observation, Observer
 from .platform import Platform, WindowInfo
 from .skills import Skill, SkillContext, make_skill
@@ -62,15 +65,22 @@ class AgentStatus:
     pos: tuple[float, float] = (0.0, 0.0)
     log: deque[str] = field(default_factory=lambda: deque(maxlen=300))
     log_count: int = 0
+    plan: Plan | None = None
+    plan_error: str = ""
 
 
 class Agent:
     def __init__(self, cfg: Config, platform: Platform, playbook_name: str | None = None,
-                 client: DecisionClient | None = None) -> None:
+                 client: DecisionClient | None = None, orchestrator: Orchestrator | None = None) -> None:
         self.cfg = cfg
         self.p = platform
         self.playbook = playbooks.load(playbook_name or cfg.agent.playbook)
         self.client = client or DecisionClient(cfg.decision)
+        self.orchestrator = orchestrator or (Orchestrator(cfg.orchestrator) if cfg.orchestrator.enabled else None)
+        self._want_plan = threading.Event()
+        self._plan_reason = "start"
+        self._last_plan_at = 0.0
+        self._fails_in_row = 0
         self.observer = Observer(cfg, platform.ocr, platform.windows.screen_size())
         self.status = AgentStatus()
         self.operator_note = ""
@@ -90,7 +100,9 @@ class Agent:
         self._skill_spec: ActionSpec | None = None
         self._history: deque[dict[str, str]] = deque(maxlen=20)
         self._notes: deque[str] = deque(maxlen=30)
-        self._labels: deque[tuple[float, float, str]] = deque(maxlen=60)
+        self.memory = WorldMemory()
+        self._duty_since = time.monotonic()
+        self._duty_actions = 0
         self._last_decision_at = 0.0
         self._last_say_at = -1e9
         self.ctx = SkillContext(input=platform.input, ocr=platform.ocr, on_label=self._on_label)
@@ -115,6 +127,9 @@ class Agent:
             threading.Thread(target=self._control_loop, name="control", daemon=True),
             threading.Thread(target=self._decision_loop, name="decision", daemon=True),
         ]
+        if self.orchestrator is not None:
+            self._threads.append(threading.Thread(target=self._plan_loop, name="planner", daemon=True))
+            self._request_plan("start")
         for t in self._threads:
             t.start()
         self._say(f"Agent started as {self.playbook.name}. Logs: {self._trace_dir}")
@@ -122,6 +137,7 @@ class Agent:
     def stop(self) -> None:
         self._stop.set()
         self._want_decision.set()
+        self._want_plan.set()
         for t in self._threads:
             t.join(timeout=3)
         self._threads = []
@@ -163,7 +179,7 @@ class Agent:
             self.pause("F8")
 
     def _on_label(self, x: float, y: float, name: str) -> None:
-        self._labels.append((x, y, name))
+        self.memory.add_landmark(x, y, name)
         self._notes.append(f"Inspected something at ({x:.0f}, {y:.0f}): {name}")
 
     def _say(self, msg: str) -> None:
@@ -177,12 +193,9 @@ class Agent:
     def _known_labels(self, obs: Observation) -> dict[int, str]:
         known: dict[int, str] = {}
         for m in obs.markers:
-            best = min(
-                ((math.hypot(m.world[0] - x, m.world[1] - y), n) for x, y, n in self._labels),
-                default=(9e9, ""),
-            )
-            if best[0] < 0.7:
-                known[m.id] = best[1]
+            name = self.memory.label_at(m.world)
+            if name:
+                known[m.id] = name
         return known
 
     def _request_decision(self, reason: str) -> None:
@@ -193,7 +206,14 @@ class Agent:
         if self._skill is not None:
             self._skill.stop(self.ctx)
             if outcome is not None and self._skill_spec is not None:
-                self._history.append({"action": self._skill_spec.description, "result": outcome})
+                spec = self._skill_spec
+                self._history.append({"duty": self.status.duty or "-", "action": spec.id,
+                                      "what": spec.description, "result": outcome})
+                self.memory.record(spec.skill, spec.args.get("world"), outcome)
+                self._duty_actions += 1
+                self._fails_in_row = self._fails_in_row + 1 if outcome.startswith("failed") else 0
+                if self._fails_in_row >= 2:
+                    self._request_plan("repeated failures")
         self._skill = None
         self._skill_spec = None
         self.status.skill = ""
@@ -208,6 +228,9 @@ class Agent:
             return
         if spec.skill == "say":
             self._last_say_at = time.monotonic()
+            plan = self.status.plan
+            if spec.id == "say:plan" and plan is not None:
+                plan.say = None  # said it; don't offer the same line again
         self._skill, self._skill_spec = skill, spec
         skill.start(self.ctx, obs)
         self.status.skill = skill.describe()
@@ -231,8 +254,26 @@ class Agent:
                 continue
             if self._skill is None:
                 self._start_skill(spec, obs)
-            elif reason in ("chat", "heartbeat") and not self._same_target(spec, self._skill_spec) and spec.skill != "wait":
+            elif self._should_interrupt(reason, result, spec):
                 self._start_skill(spec, obs)
+
+    def _should_interrupt(self, reason: str, result: DecisionResult, spec: ActionSpec) -> bool:
+        """Whether a fresh decision may cut short the skill that's running.
+
+        Letting every heartbeat swap the plan made the agent dither: two near-equal
+        options would alternate and it never got anywhere. Now a running skill is only
+        replaced for chat, danger, a new plan, or a heartbeat pick the model is confident about.
+        """
+        if reason not in ("chat", "heartbeat", "plan") or spec.skill == "wait" or self._same_target(spec, self._skill_spec):
+            return False
+        a = result.answers
+        if "danger" in a and a["danger"].yes > 0.6:
+            return True
+        if reason == "chat":
+            return "spoken_to" in a and a["spoken_to"].yes > 0.5
+        act = a.get("action")
+        # A fresh plan is a deliberate change of direction, so it needs less certainty.
+        return act is not None and act.confidence >= (0.4 if reason == "plan" else 0.6)
 
     def _pick(self, result: DecisionResult, actions: list[ActionSpec]) -> ActionSpec | None:
         by_id = {a.id: a for a in actions}
@@ -276,6 +317,7 @@ class Agent:
             with self._lock:
                 self._latest_obs = obs
             self.status.pos = obs.pos
+            self.memory.update(obs)
 
             if self._paused.is_set():
                 self.status.mode = "paused"
@@ -295,6 +337,7 @@ class Agent:
                     self._request_decision("idle")
                 if obs.new_chat:
                     self._request_decision("chat")
+                    self._request_plan("chat")
                 elif time.monotonic() - self._last_decision_at > self.cfg.agent.heartbeat_s:
                     self._request_decision("heartbeat")
 
@@ -332,12 +375,33 @@ class Agent:
                 self._decision_busy = False
                 self._last_decision_at = time.monotonic()
 
+    def _state(self, obs: Observation, known: dict[int, str]) -> dict[str, Any]:
+        duty_info = None
+        if self.status.duty:
+            duty_info = {
+                "minutes_on_this_duty": round((time.monotonic() - self._duty_since) / 60, 1),
+                "actions_taken_on_this_duty": self._duty_actions,
+            }
+        return build_state(obs, self.playbook, self.status.duty, list(self._history), list(self._notes),
+                           self.operator_note, known, self.memory, duty_info)
+
+    def _set_duty(self, duty: str, why: str) -> None:
+        if duty != self.status.duty:
+            self._say(f"Duty: {duty} ({why})")
+            self._duty_since = time.monotonic()
+            self._duty_actions = 0
+        self.status.duty = duty
+
     def _decide(self, obs: Observation, reason: str) -> None:
         known = self._known_labels(obs)
         can_chat = time.monotonic() - self._last_say_at > self.cfg.agent.chat_cooldown_s
-        actions = build_actions(obs, self.playbook, self.cfg.agent.reach_tiles, can_chat, known)
-        state = build_state(obs, self.playbook, self.status.duty, list(self._history), list(self._notes),
-                            self.operator_note, known)
+        actions = build_actions(obs, self.playbook, self.cfg.agent.reach_tiles, can_chat, known, self.memory)
+        plan = self.status.plan
+        if plan is not None and plan.say and can_chat:
+            actions.append(ActionSpec("say:plan", "say", f'Say in local chat: "{plan.say}"', {"text": plan.say}))
+        state = self._state(obs, known)
+        if plan is not None:
+            state["plan_from_your_orchestrator"] = plan.for_state()
         questions = build_questions(self.playbook, actions)
         img = annotate(obs.frame, obs.geo, obs.markers, width=self.cfg.decision.image_width)
         b64 = to_jpeg_b64(img)
@@ -351,10 +415,9 @@ class Agent:
             return
         a = result.answers
         duty = a.get("duty")
-        if duty and duty.choice:
-            if duty.choice != self.status.duty:
-                self._say(f"Duty: {duty.choice} ({duty.confidence:.0%})")
-            self.status.duty = duty.choice
+        # The orchestrator's duty wins; the decision model only picks one when there's no plan.
+        if duty and duty.choice and not (plan is not None and plan.duty):
+            self._set_duty(duty.choice, f"{duty.confidence:.0%}")
         act = a.get("action")
         top = sorted((act.probabilities if act else {}).items(), key=lambda kv: -kv[1])[:8]
         view = DecisionView(
@@ -366,6 +429,67 @@ class Agent:
         self.status.decision = view
         self._results.append((reason, result, actions, ""))
         self._trace(state, questions, result, img, reason)
+
+    # ---- planner loop ----------------------------------------------------
+
+    def _request_plan(self, reason: str) -> None:
+        if self.orchestrator is not None:
+            self._plan_reason = reason
+            self._want_plan.set()
+
+    def _plan_loop(self) -> None:
+        while not self._stop.is_set():
+            due = time.monotonic() - self._last_plan_at > self.cfg.orchestrator.interval_s
+            if not self._want_plan.wait(timeout=0.5) and not due:
+                continue
+            if self._stop.is_set():
+                break
+            if self._paused.is_set():
+                time.sleep(0.2)
+                continue
+            if not self.cfg.orchestrator.enabled:  # switched off from the control window
+                self.status.plan = None
+                self._want_plan.clear()
+                time.sleep(0.5)
+                continue
+            # Chat and failures can fire in bursts; don't re-plan more than every few seconds.
+            if time.monotonic() - self._last_plan_at < 4.0:
+                time.sleep(0.2)
+                continue
+            reason = self._plan_reason if self._want_plan.is_set() else "interval"
+            self._want_plan.clear()
+            with self._lock:
+                obs = self._latest_obs
+            if obs is None:
+                time.sleep(0.5)
+                continue
+            self._plan(obs, reason)
+            self._last_plan_at = time.monotonic()
+
+    def _plan(self, obs: Observation, reason: str) -> None:
+        state = self._state(obs, self._known_labels(obs))
+        img = annotate(obs.frame, obs.geo, obs.markers, width=self.cfg.orchestrator.image_width)
+        duties = [d.id for d in self.playbook.duties]
+        try:
+            plan = self.orchestrator.plan(state, duties, to_jpeg_b64(img), self.status.plan)
+        except OrchestratorError as exc:
+            self.status.plan_error = str(exc)
+            self._say(f"Planning failed: {exc}")
+            return
+        self.status.plan, self.status.plan_error = plan, ""
+        self._fails_in_row = 0
+        if plan.duty:
+            self._set_duty(plan.duty, "orchestrator")
+        if plan.note:
+            self._notes.append(f"Orchestrator note: {plan.note}")
+        self._say(f"Plan ({reason}, {plan.latency_ms / 1000:.1f} s): {plan.goal} → now: {plan.step}")
+        self._request_decision("plan")
+        if self._trace_dir is not None:
+            rec = {"t": time.time(), "reason": reason, "model": plan.model, "latency_ms": round(plan.latency_ms),
+                   "goal": plan.goal, "steps": plan.steps, "current_step": plan.current_step,
+                   "duty": plan.duty, "say": plan.say, "note": plan.note}
+            with (self._trace_dir / "plans.jsonl").open("a") as fh:
+                fh.write(json.dumps(rec) + "\n")
 
     def _trace(self, state: dict[str, Any], questions: dict[str, Any], result: DecisionResult,
                img: Image.Image, reason: str) -> None:

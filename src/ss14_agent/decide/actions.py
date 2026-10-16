@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..memory import DIRECTIONS, WorldMemory, compass
 from ..perception.observer import Observation
 from ..perception.tiles import Marker
 from ..playbook import Playbook
-
-DIRECTIONS = {"north": (0, -1), "east": (1, 0), "south": (0, 1), "west": (-1, 0)}
 
 SCREEN_GUIDE = (
     "The image is the Space Station 14 game window, seen from above with north at the top. "
@@ -42,28 +42,65 @@ def build_actions(
     reach: float,
     can_chat: bool,
     known: dict[int, str] | None = None,
+    memory: WorldMemory | None = None,
 ) -> list[ActionSpec]:
     known = known or {}
     acts: list[ActionSpec] = []
+
+    def tried(skill: str, world: tuple[float, float]) -> str:
+        if memory is None:
+            return ""
+        past = memory.attempts_at(skill, world)
+        if not past:
+            return ""
+        return f" You already tried this here {len(past)} time(s); last result: {past[-1]}."
+
     for m in obs.markers:
         name = f"marker {m.id}" + (f" ({known[m.id]})" if m.id in known else "")
         where = _offset_text(m)
         tgt = {"world": m.world}
-        acts.append(ActionSpec(f"walk_to:{m.id}", "walk_to", f"Walk next to {name}, {where}.", tgt))
+        acts.append(ActionSpec(
+            f"walk_to:{m.id}", "walk_to", f"Walk next to {name}, {where}." + tried("walk_to", m.world), tgt,
+        ))
         acts.append(ActionSpec(
             f"click:{m.id}", "click",
-            f"Left-click {name}: picks it up with an empty hand, or uses the held item on it. Walks into reach first.",
+            f"Left-click {name}: picks it up with an empty hand, or uses the held item on it. Walks into reach first."
+            + tried("click", m.world),
             tgt,
         ))
         acts.append(ActionSpec(
             f"activate:{m.id}", "activate",
-            f"Activate {name} with E: opens, toggles or operates it (doors, machines, containers). Walks into reach first.",
+            f"Activate {name} with E: opens, toggles or operates it (doors, machines, containers). Walks into reach first."
+            + tried("activate", m.world),
             tgt,
         ))
         if m.id not in known:
             acts.append(ActionSpec(f"inspect:{m.id}", "inspect", f"Right-click {name} to read what it is.", tgt))
     for d, vec in DIRECTIONS.items():
-        acts.append(ActionSpec(f"explore:{d}", "explore", f"Walk about 6 tiles {d} to explore.", {"dir": vec}))
+        if memory is None:
+            acts.append(ActionSpec(f"explore:{d}", "explore", f"Walk about 6 tiles {d} to explore.", {"dir": vec}))
+            continue
+        target = memory.explore_target(obs.pos, vec)
+        if target is not None:
+            share = memory.unexplored(obs.pos, vec)
+            desc = (f"Explore {d}: walk to the nearest area {d} of you that you haven't seen yet, "
+                    f"{compass(target[0] - obs.pos[0], target[1] - obs.pos[1])} ({share:.0%} of that way is unexplored).")
+        else:
+            desc = f"Walk about 6 tiles {d}. Everything that way is already explored, so this finds nothing new."
+        acts.append(ActionSpec(f"explore:{d}", "explore", desc, {"dir": vec, "target": target}))
+    if memory is not None:
+        on_screen = {(round(m.world[0]), round(m.world[1])) for m in obs.markers}
+        far = [lm for lm in memory.landmarks
+               if (round(lm.world[0]), round(lm.world[1])) not in on_screen
+               and math.hypot(lm.world[0] - obs.pos[0], lm.world[1] - obs.pos[1]) > 2.5]
+        far.sort(key=lambda lm: math.hypot(lm.world[0] - obs.pos[0], lm.world[1] - obs.pos[1]))
+        for i, lm in enumerate(far[:6]):
+            acts.append(ActionSpec(
+                f"go_back:{i}", "walk_to",
+                f"Walk back to the {lm.name} you found earlier, "
+                f"{compass(lm.world[0] - obs.pos[0], lm.world[1] - obs.pos[1])}.",
+                {"world": lm.world},
+            ))
     acts += [
         ActionSpec("use_held", "key", "Use the item in your active hand (Z), e.g. turn on a tool.", {"key": "z"}),
         ActionSpec("drop", "key", "Drop the item in your active hand (Q).", {"key": "q"}),
@@ -89,6 +126,8 @@ def build_state(
     notes: list[str],
     operator_note: str = "",
     known: dict[int, str] | None = None,
+    memory: WorldMemory | None = None,
+    duty_info: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     known = known or {}
     duty = playbook.duty(current_duty)
@@ -105,9 +144,13 @@ def build_state(
         ],
         "new_chat_lines": obs.new_chat[-8:],
         "recent_chat": obs.recent_chat[-10:],
-        "your_recent_actions": history[-8:],
+        "your_recent_actions": history[-10:],
         "notes": notes[-10:],
     }
+    if duty_info:
+        state["progress_on_current_duty"] = duty_info
+    if memory is not None:
+        state["memory"] = memory.summary(obs.pos)
     if operator_note:
         state["instruction_from_your_operator"] = operator_note
     return state
@@ -128,8 +171,11 @@ def build_questions(playbook: Playbook, actions: list[ActionSpec]) -> dict[str, 
             "type": "choice",
             "instructions": (
                 "Pick the single next action that best moves the current duty forward, or answers "
-                "someone who just spoke to you. Use the numbered markers in the image to choose targets. "
-                "Don't repeat an action that just failed in the same way."
+                "someone who just spoke to you. If the state has a plan_from_your_orchestrator, pick "
+                "the action that carries out its do_now step. Use the numbered markers in the image to choose targets. "
+                "Don't repeat an action that just failed in the same way. When you need to find "
+                "something, explore toward unexplored areas instead of going back where you've been, "
+                "and use go_back to return to things you identified earlier."
             ),
             "criteria": {a.id: a.description for a in actions},
         },

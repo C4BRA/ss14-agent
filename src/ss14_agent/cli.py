@@ -1,4 +1,4 @@
-"""Command line entry point: `ss14-agent [gui|run|doctor|snap|probe|decide-once|windows]`."""
+"""Command line entry point: `ss14-agent [gui|run|doctor|snap|probe|decide-once|windows|models]`."""
 
 from __future__ import annotations
 
@@ -141,6 +141,20 @@ def cmd_decide_once(cfg: Config, args) -> int:
     frame = p.capturer.grab(win)
     obs = agent.observer.observe(frame, win)
     agent.operator_note = args.note or ""
+    if agent.orchestrator is not None:
+        print(f"Planning with {cfg.orchestrator.model}...")
+        agent._plan(obs, "manual")
+        plan = agent.status.plan
+        if plan is None:
+            print(f"Planning failed: {agent.status.plan_error}\n(continuing without a plan)")
+        else:
+            print(f"Goal: {plan.goal}   ({plan.latency_ms:.0f} ms)")
+            for i, step in enumerate(plan.steps):
+                print(f"  {'→' if i == plan.current_step else ' '} {i + 1}. {step}")
+            if plan.say:
+                print(f"  Would say: {plan.say!r}")
+        agent._results.clear()
+    print(f"Deciding with {cfg.decision.model}...")
     agent._decide(obs, "manual")
     d = agent.status.decision
     if d is None or d.error:
@@ -170,6 +184,23 @@ def cmd_run(cfg: Config, args) -> int:
     return 0
 
 
+def cmd_models(cfg: Config, args) -> int:
+    from . import models
+
+    try:
+        catalog = models.fetch_catalog()
+    except Exception as exc:
+        print(f"Couldn't fetch {models.CATALOG_URL}: {exc}")
+        return 1
+    print("Decision models (Decisions API; OpenRouter doesn't flag these, so this matches by name):")
+    for m in models.decision_models(catalog, cfg.decision.models):
+        print(f"  {m}{'   <- current' if m == cfg.decision.model else ''}")
+    print("\nOrchestrator candidates (chat models that accept images):")
+    for m in models.vision_models(catalog, cfg.orchestrator.models):
+        print(f"  {m}{'   <- current' if m == cfg.orchestrator.model else ''}")
+    return 0
+
+
 def cmd_gui(cfg: Config, args) -> int:
     from .gui.app import run_gui
 
@@ -191,8 +222,12 @@ def main(argv: list[str] | None = None) -> int:
     once = sub.add_parser("decide-once", help="make one decision on the current screen and print it (no input sent)")
     once.add_argument("--note", help="instruction for the agent")
     sub.add_parser("windows", help="list on-screen windows")
+    sub.add_parser("models", help="list decision and orchestrator models available on OpenRouter")
     for p in (gui, run, once):
         p.add_argument("--playbook", default=None, help="playbook name in playbooks/ (default from config)")
+        p.add_argument("--decision-model", help="decision model id, e.g. inception/mercury-decide:free")
+        p.add_argument("--orchestrator-model", help="orchestrator model id, e.g. anthropic/claude-sonnet-5.5")
+        p.add_argument("--no-orchestrator", action="store_true", help="run on the decision model alone")
     args = parser.parse_args(argv)
     if not hasattr(args, "playbook"):
         args.playbook = None
@@ -200,9 +235,17 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     load_dotenv()
     cfg = load_config(args.config)
+    if getattr(args, "decision_model", None):
+        cfg.decision.model = args.decision_model
+    if getattr(args, "orchestrator_model", None):
+        cfg.orchestrator.model = args.orchestrator_model
+        cfg.orchestrator.enabled = True
+    if getattr(args, "no_orchestrator", False):
+        cfg.orchestrator.enabled = False
     handlers = {
         None: cmd_gui, "gui": cmd_gui, "run": cmd_run, "doctor": cmd_doctor, "snap": cmd_snap,
         "probe": cmd_probe, "decide-once": cmd_decide_once, "windows": cmd_windows,
+        "models": cmd_models,
     }
     return handlers[args.cmd](cfg, args)
 
