@@ -41,7 +41,7 @@ class DecisionCfg:
     endpoint: str = "https://openrouter.ai/api/alpha/decisions"
     model: str = "inception/mercury-decide:free"
     api_key_env: str = "OPENROUTER_API_KEY"
-    image_mode: str = "assets"
+    image_mode: str = "parts"
     image_width: int = 1024
     timeout_s: float = 20
     max_calls_per_s: float = 2.0
