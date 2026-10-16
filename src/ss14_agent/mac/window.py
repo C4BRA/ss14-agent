@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import Quartz
 from AppKit import NSApplicationActivateIgnoringOtherApps, NSRunningApplication, NSScreen
 
@@ -34,9 +36,12 @@ class QuartzWindows:
 
     def find(self, patterns: list[str]) -> WindowInfo | None:
         pats = [p.lower() for p in patterns]
+        me = os.getpid()
         candidates = [
             w for w in self.list_windows()
-            if any(p in w.title.lower() or p in w.owner.lower() for p in pats)
+            # Skip our own control window: its "SS14 Agent" title matches too, and
+            # capturing it makes the agent watch itself.
+            if w.pid != me and any(p in w.title.lower() or p in w.owner.lower() for p in pats)
         ]
         if not candidates:
             return None
